@@ -1,0 +1,89 @@
+#
+# Per-table storage options, named through ENGINE_ATTRIBUTE.
+#
+# This server has no engine-specific option syntax, so a table names its storage options as one
+# JSON object the engine reads back itself.  What is checked here is that the values actually
+# reach the table, that an unnamed option keeps its session default, and that a mistyped option
+# is refused with a message naming it rather than stored and ignored.
+#
+--source ../include/have_tidesdb.inc
+
+--echo # Every option a table can name
+CREATE TABLE t_opts (id INT PRIMARY KEY, v VARCHAR(50)) ENGINE=TidesDB
+  ENGINE_ATTRIBUTE='{"compression": "ZSTD", "bloom_filter": false, "bloom_fpr": 50,
+                     "ttl": 3600, "keep_values_inline": true, "min_levels": 5,
+                     "isolation_level": "READ_COMMITTED"}';
+SHOW CREATE TABLE t_opts;
+INSERT INTO t_opts VALUES (1, 'a'), (2, 'b');
+SELECT * FROM t_opts ORDER BY id;
+DROP TABLE t_opts;
+
+--echo # An option named once does not disturb the others
+CREATE TABLE t_one (id INT PRIMARY KEY) ENGINE=TidesDB ENGINE_ATTRIBUTE='{"ttl": 60}';
+INSERT INTO t_one VALUES (1);
+SELECT * FROM t_one;
+DROP TABLE t_one;
+
+--echo # A table naming nothing takes the session defaults
+CREATE TABLE t_plain (id INT PRIMARY KEY) ENGINE=TidesDB;
+INSERT INTO t_plain VALUES (1);
+SELECT * FROM t_plain;
+DROP TABLE t_plain;
+
+--echo # A misspelled option is refused, naming itself
+--error ER_ILLEGAL_HA_CREATE_OPTION
+CREATE TABLE t_bad (id INT PRIMARY KEY) ENGINE=TidesDB ENGINE_ATTRIBUTE='{"blom_filter": false}';
+
+--echo # So is a value out of range
+--error ER_ILLEGAL_HA_CREATE_OPTION
+CREATE TABLE t_bad (id INT PRIMARY KEY) ENGINE=TidesDB ENGINE_ATTRIBUTE='{"bloom_fpr": 0}';
+
+--echo # And a value that is not one of the accepted names
+--error ER_ILLEGAL_HA_CREATE_OPTION
+CREATE TABLE t_bad (id INT PRIMARY KEY) ENGINE=TidesDB ENGINE_ATTRIBUTE='{"compression": "BROTLI"}';
+
+--echo # Encryption is named the same way
+--error ER_ILLEGAL_HA_CREATE_OPTION
+CREATE TABLE t_bad (id INT PRIMARY KEY) ENGINE=TidesDB ENGINE_ATTRIBUTE='{"encryption_key_id": 999}';
+
+--echo # ALTER refuses one the same way
+CREATE TABLE t_alter (id INT PRIMARY KEY) ENGINE=TidesDB ENGINE_ATTRIBUTE='{"ttl": 60}';
+--error ER_ILLEGAL_HA_CREATE_OPTION
+ALTER TABLE t_alter ENGINE_ATTRIBUTE='{"ttl": "soon"}', ALGORITHM=INPLACE;
+
+--echo # And accepts a change it understands
+ALTER TABLE t_alter ENGINE_ATTRIBUTE='{"ttl": 120, "compression": "SNAPPY"}';
+SHOW CREATE TABLE t_alter;
+DROP TABLE t_alter;
+
+--echo #
+--echo # The options a table is created with are settled then, not resolved again later
+--echo #
+--echo # A table that names no options inherits the session defaults, and what it inherited has to
+--echo # stay with it: an option resolved afresh at each open would make the same table behave
+--echo # differently depending on what the session that opened it happened to be set to.
+--echo #
+
+SET SESSION tidesdb_default_isolation_level = 'READ_COMMITTED';
+CREATE TABLE t_frozen (id INT PRIMARY KEY, v INT) ENGINE=TidesDB;
+INSERT INTO t_frozen VALUES (1, 10);
+
+--echo # Put the session default back, then reopen the table from a server that never saw it set
+SET SESSION tidesdb_default_isolation_level = DEFAULT;
+--source include/restart_mysqld.inc
+
+connect (con1, localhost, root,,test);
+connection con1;
+SET SESSION TRANSACTION ISOLATION LEVEL REPEATABLE READ;
+BEGIN;
+SELECT id, v FROM t_frozen ORDER BY id;
+connection default;
+INSERT INTO t_frozen VALUES (2, 20);
+connection con1;
+--echo # Still read committed, as it was created: the row committed afterwards is visible
+SELECT id, v FROM t_frozen ORDER BY id;
+COMMIT;
+
+connection default;
+disconnect con1;
+DROP TABLE t_frozen;

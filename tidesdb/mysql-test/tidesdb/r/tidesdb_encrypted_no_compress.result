@@ -1,0 +1,84 @@
+# ----------------------------------------------------------------------
+# Setup
+# Creating local configuration file for keyring component: component_keyring_file
+# Creating manifest file for current MySQL server instance
+# Re-starting mysql server with manifest file
+# ----------------------------------------------------------------------
+#
+# ============================================
+# Encrypted table with a selected compression creates and reports it
+# ============================================
+#
+CREATE TABLE enc_lz4 (
+id INT PRIMARY KEY,
+u  INT,
+v  VARCHAR(200),
+KEY k_u (u)
+) ENGINE=TIDESDB ENGINE_ATTRIBUTE='{"encrypted": true, "compression": "LZ4"}';
+# the table still reports the requested COMPRESSION option to the user
+SHOW CREATE TABLE enc_lz4;
+Table	Create Table
+enc_lz4	CREATE TABLE `enc_lz4` (
+  `id` int NOT NULL,
+  `u` int DEFAULT NULL,
+  `v` varchar(200) COLLATE utf8mb4_general_ci DEFAULT NULL,
+  PRIMARY KEY (`id`),
+  KEY `k_u` (`u`)
+) ENGINE=TidesDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci /*!80021 ENGINE_ATTRIBUTE='{"encrypted": true, "compression": "LZ4"}' */
+#
+# ============================================
+# Control: a non-encrypted table with the same compression
+# ============================================
+#
+CREATE TABLE plain_lz4 (
+id INT PRIMARY KEY,
+v  VARCHAR(200)
+) ENGINE=TIDESDB ENGINE_ATTRIBUTE='{"compression": "LZ4"}';
+SHOW CREATE TABLE plain_lz4;
+Table	Create Table
+plain_lz4	CREATE TABLE `plain_lz4` (
+  `id` int NOT NULL,
+  `v` varchar(200) COLLATE utf8mb4_general_ci DEFAULT NULL,
+  PRIMARY KEY (`id`)
+) ENGINE=TidesDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci /*!80021 ENGINE_ATTRIBUTE='{"compression": "LZ4"}' */
+#
+# ============================================
+# Data round-trips through the encrypted data CF and the compressed index CF
+# ============================================
+#
+INSERT INTO enc_lz4 VALUES (1, 10, 'alpha'), (2, 20, 'beta'), (3, 30, 'gamma');
+UPDATE enc_lz4 SET v = 'delta' WHERE id = 2;
+DELETE FROM enc_lz4 WHERE id = 3;
+SELECT * FROM enc_lz4 ORDER BY id;
+id	u	v
+1	10	alpha
+2	20	delta
+# covering index scan on the compressed index CF
+SELECT id FROM enc_lz4 WHERE u = 10;
+id
+1
+#
+# ============================================
+# Data still round-trips after TRUNCATE recreates the CFs
+# ============================================
+#
+TRUNCATE TABLE enc_lz4;
+INSERT INTO enc_lz4 VALUES (4, 40, 'epsilon'), (5, 50, 'zeta');
+SELECT * FROM enc_lz4 ORDER BY id;
+id	u	v
+4	40	epsilon
+5	50	zeta
+SELECT id FROM enc_lz4 WHERE u = 40;
+id
+4
+DROP TABLE enc_lz4;
+DROP TABLE plain_lz4;
+#
+# ----------------------------------------------------------------------
+# Teardown
+# Removing manifest file for current MySQL server instance
+# Removing local keyring file for keyring component: component_keyring_file
+# Removing local configuration file for keyring component: component_keyring_file
+# Restarting server without the manifest file
+# ----------------------------------------------------------------------
+# Done.

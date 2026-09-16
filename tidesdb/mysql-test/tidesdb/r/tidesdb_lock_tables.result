@@ -1,0 +1,89 @@
+#
+# Every kind of statement under a write lock
+#
+CREATE TABLE lt (
+id INT PRIMARY KEY AUTO_INCREMENT,
+v  INT,
+KEY k (v)
+) ENGINE=TIDESDB;
+INSERT INTO lt (v) VALUES (1),(2),(3);
+LOCK TABLES lt WRITE;
+SELECT COUNT(*) AS rows_seen FROM lt;
+rows_seen
+3
+INSERT INTO lt (v) VALUES (4);
+UPDATE lt SET v = v + 10 WHERE id = 1;
+DELETE FROM lt WHERE id = 2;
+# through the primary key
+SELECT id, v FROM lt ORDER BY id;
+id	v
+1	11
+3	3
+4	4
+# and through a secondary index, which needs its own iterator per statement
+SELECT id, v FROM lt FORCE INDEX (k) ORDER BY v;
+id	v
+3	3
+4	4
+1	11
+UNLOCK TABLES;
+# the work is visible once the lock is released
+SELECT id, v FROM lt ORDER BY id;
+id	v
+1	11
+3	3
+4	4
+#
+# A read lock
+#
+LOCK TABLES lt READ;
+SELECT COUNT(*) AS rows_seen FROM lt;
+rows_seen
+3
+SELECT id, v FROM lt FORCE INDEX (k) ORDER BY v;
+id	v
+3	3
+4	4
+1	11
+UNLOCK TABLES;
+#
+# Two tables locked at once, written in one statement each
+#
+CREATE TABLE lt2 (id INT PRIMARY KEY, s VARCHAR(20)) ENGINE=TIDESDB;
+LOCK TABLES lt WRITE, lt2 WRITE;
+INSERT INTO lt (v) VALUES (5);
+INSERT INTO lt2 VALUES (1,'a'),(2,'b');
+SELECT COUNT(*) AS lt_rows FROM lt;
+lt_rows
+4
+SELECT COUNT(*) AS lt2_rows FROM lt2;
+lt2_rows
+2
+UNLOCK TABLES;
+#
+# An explicit transaction under a held lock, and a rollback inside it
+#
+LOCK TABLES lt2 WRITE;
+BEGIN;
+INSERT INTO lt2 VALUES (3,'c');
+SELECT COUNT(*) AS during_txn FROM lt2;
+during_txn
+3
+ROLLBACK;
+SELECT COUNT(*) AS after_rollback FROM lt2;
+after_rollback
+2
+UNLOCK TABLES;
+#
+# The auto-increment counter reaches SHOW CREATE TABLE, so a dump carries it
+#
+SHOW CREATE TABLE lt;
+Table	Create Table
+lt	CREATE TABLE `lt` (
+  `id` int NOT NULL AUTO_INCREMENT,
+  `v` int DEFAULT NULL,
+  PRIMARY KEY (`id`),
+  KEY `k` (`v`)
+) ENGINE=TidesDB AUTO_INCREMENT=N DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci
+DROP TABLE lt, lt2;
+# Done.

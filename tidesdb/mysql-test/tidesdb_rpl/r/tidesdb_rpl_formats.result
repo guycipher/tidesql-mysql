@@ -1,0 +1,54 @@
+include/rpl/init_source_replica.inc
+Warnings:
+Note	####	Sending passwords in plain text without SSL/TLS is extremely insecure.
+Note	####	Storing MySQL user name or password information in the connection metadata repository is not secure and is therefore not recommended. Please consider using the USER and PASSWORD connection options for START REPLICA; see the 'START REPLICA Syntax' in the MySQL Manual for more information.
+[connection master]
+#
+# STATEMENT format
+#
+SET SESSION binlog_format = STATEMENT;
+SELECT @@SESSION.binlog_format AS binlog_format;
+binlog_format
+STATEMENT
+CREATE TABLE s1 (id INT PRIMARY KEY, v INT, s VARCHAR(32)) ENGINE=TidesDB;
+INSERT INTO s1 VALUES (1, 10, 'one'), (2, 20, 'two'), (3, 30, 'three');
+UPDATE s1 SET v = v + 1 WHERE id <= 2;
+DELETE FROM s1 WHERE id = 3;
+# a multi-statement transaction in statement format
+BEGIN;
+INSERT INTO s1 VALUES (4, 40, 'four');
+UPDATE s1 SET s = 'four-b' WHERE id = 4;
+COMMIT;
+include/rpl/sync_to_replica.inc
+# replica rows after statement-format replication
+SELECT id, v, s FROM s1 ORDER BY id;
+id	v	s
+1	11	one
+2	21	two
+4	40	four-b
+#
+# MIXED format
+#
+SET SESSION binlog_format = MIXED;
+SELECT @@SESSION.binlog_format AS binlog_format;
+binlog_format
+MIXED
+CREATE TABLE m1 (id INT PRIMARY KEY AUTO_INCREMENT, v INT, s VARCHAR(32)) ENGINE=TidesDB;
+INSERT INTO m1 (v, s) VALUES (1, 'a'), (2, 'b'), (3, 'c');
+# UUID() is unsafe for statement format, so MIXED must switch this row to
+# row format rather than ship the statement
+UPDATE m1 SET s = LEFT(UUID(), 0) WHERE id = 1;
+DELETE FROM m1 WHERE id = 3;
+include/rpl/sync_to_replica.inc
+# replica rows after mixed-format replication
+SELECT id, v, s FROM m1 ORDER BY id;
+id	v	s
+1	1	
+2	2	b
+#
+# source and replica agree byte for byte
+#
+# extended checksums match on source and replica
+DROP TABLE s1, m1;
+include/rpl/sync_to_replica.inc
+include/rpl/deinit.inc

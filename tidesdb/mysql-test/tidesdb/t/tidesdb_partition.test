@@ -1,0 +1,65 @@
+--source ../include/have_tidesdb.inc
+#
+# Partitioning is not available to this engine on this server.
+#
+# This server has no general partitioning layer: it was removed, and an engine
+# that wants partitioned tables implements the partitioning itself, as the
+# built-in transactional engine does with a second handler of its own.  This
+# engine does not, so every partitioned CREATE is refused -- which is the right
+# outcome, because the alternative would be a table the server thinks is
+# partitioned and the engine stores as one heap.
+#
+# The shared tidesdb_partition test covers what partitioned tables do where the
+# server partitions them for the engine.  What is pinned here is the refusal,
+# so that native partitioning arriving in this engine shows up as a failure
+# asking for that test rather than passing unnoticed.
+#
+
+--echo #
+--echo # Every partitioning kind is refused, at CREATE
+--echo #
+
+--error ER_CHECK_NOT_IMPLEMENTED
+CREATE TABLE t_hash (id INT NOT NULL, val VARCHAR(50), PRIMARY KEY (id))
+ENGINE=TIDESDB PARTITION BY HASH(id) PARTITIONS 4;
+
+--error ER_CHECK_NOT_IMPLEMENTED
+CREATE TABLE t_key (id INT NOT NULL, val VARCHAR(50), PRIMARY KEY (id))
+ENGINE=TIDESDB PARTITION BY KEY(id) PARTITIONS 3;
+
+--error ER_CHECK_NOT_IMPLEMENTED
+CREATE TABLE t_range (id INT NOT NULL, val VARCHAR(50), PRIMARY KEY (id))
+ENGINE=TIDESDB PARTITION BY RANGE(id) (
+  PARTITION p0 VALUES LESS THAN (100),
+  PARTITION p1 VALUES LESS THAN MAXVALUE
+);
+
+--error ER_CHECK_NOT_IMPLEMENTED
+CREATE TABLE t_list (id INT NOT NULL, region INT NOT NULL, PRIMARY KEY (id, region))
+ENGINE=TIDESDB PARTITION BY LIST(region) (
+  PARTITION pa VALUES IN (1, 2),
+  PARTITION pb VALUES IN (3, 4)
+);
+
+--error ER_CHECK_NOT_IMPLEMENTED
+CREATE TABLE t_range_cols (id INT NOT NULL, created DATE NOT NULL, PRIMARY KEY (id, created))
+ENGINE=TIDESDB PARTITION BY RANGE COLUMNS(created) (
+  PARTITION p2024 VALUES LESS THAN ('2025-01-01'),
+  PARTITION pmax  VALUES LESS THAN (MAXVALUE)
+);
+
+--echo #
+--echo # And at ALTER, so an existing table cannot be partitioned either
+--echo #
+CREATE TABLE t_plain (id INT NOT NULL PRIMARY KEY, val VARCHAR(50)) ENGINE=TIDESDB;
+INSERT INTO t_plain VALUES (1, 'a'), (2, 'b');
+
+--error ER_CHECK_NOT_IMPLEMENTED
+ALTER TABLE t_plain PARTITION BY HASH(id) PARTITIONS 4;
+
+--echo # The table is untouched by the refusal
+SELECT * FROM t_plain ORDER BY id;
+DROP TABLE t_plain;
+
+--source ../include/cleanup_tidesdb.inc
+--echo # Done.

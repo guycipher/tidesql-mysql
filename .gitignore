@@ -1,0 +1,57 @@
+# Build output
+build
+build-*
+cmake-build-*
+CMakeFiles/
+CMakeCache.txt
+cmake_install.cmake
+CTestTestfile.cmake
+Testing/
+install_manifest.txt
+
+# Compiled objects and libraries.  Note *.txt is deliberately not ignored here:
+# CMakeLists.txt is source.
+*.o
+*.obj
+*.lo
+*.slo
+*.d
+*.gch
+*.pch
+*.a
+*.la
+*.lai
+*.lib
+*.so
+*.so.*
+*.dylib
+*.dll
+*.exe
+*.pdb
+*.ilk
+*.out
+*.app
+
+# mysql-test run artifacts.  The .test and .result files are source and stay
+# tracked; var/ is the server's scratch directory and .reject is the actual
+# output of a failing run, written next to the expectation it did not match.
+var/
+*.reject
+
+# The manual is built from the markdown under doc/ by doc/tools/build_manual_pdf.py
+doc/*.pdf
+
+# Python
+__pycache__/
+*.py[cod]
+
+# Package managers
+vcpkg_installed/
+
+# Editors and OS
+.idea/
+.vscode/
+.vs/
+*.swp
+*~
+.DS_Store

@@ -1,0 +1,28 @@
+--source ../include/have_tidesdb.inc
+#
+# System-versioned tables are not available on this server.
+#
+# The shared tidesdb_versioning test checks that a system-versioned table works
+# on this engine: the server maintains the period columns and the history, and
+# the engine stores them as ordinary columns through its self-describing row
+# format.  There is nothing engine-specific to check here, because this server
+# has no system versioning at all -- the syntax does not parse.
+#
+# The refusal is pinned so that system versioning arriving on this server shows
+# up as a failure asking for the shared test rather than passing unnoticed.
+#
+
+--error ER_PARSE_ERROR
+CREATE TABLE t (id INT PRIMARY KEY, v INT) WITH SYSTEM VERSIONING ENGINE=TidesDB;
+
+--error ER_PARSE_ERROR
+CREATE TABLE t (
+  id INT PRIMARY KEY,
+  v INT,
+  row_start TIMESTAMP(6) GENERATED ALWAYS AS ROW START,
+  row_end   TIMESTAMP(6) GENERATED ALWAYS AS ROW END,
+  PERIOD FOR SYSTEM_TIME (row_start, row_end)
+) ENGINE=TidesDB WITH SYSTEM VERSIONING;
+
+--source ../include/cleanup_tidesdb.inc
+--echo # Done.

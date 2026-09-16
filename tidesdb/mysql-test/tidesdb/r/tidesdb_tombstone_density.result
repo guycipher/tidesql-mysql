@@ -1,0 +1,217 @@
+#
+# === Table-level tombstone density options accept and persist ===
+#
+CREATE TABLE t_td (
+pk BIGINT PRIMARY KEY,
+c0 INT,
+KEY (c0)
+) ENGINE=TIDESDB ENGINE_ATTRIBUTE='{"tombstone_density_trigger": 5000,
+                                    "tombstone_density_min_entries": 512}';
+SHOW CREATE TABLE t_td;
+Table	Create Table
+t_td	CREATE TABLE `t_td` (
+  `pk` bigint NOT NULL,
+  `c0` int DEFAULT NULL,
+  PRIMARY KEY (`pk`),
+  KEY `c0` (`c0`)
+) ENGINE=TidesDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci /*!80021 ENGINE_ATTRIBUTE='{"tombstone_density_trigger": 5000, "tombstone_density_min_entries": 512}' */
+ALTER TABLE t_td ENGINE_ATTRIBUTE='{"tombstone_density_trigger": 2000}';
+SHOW CREATE TABLE t_td;
+Table	Create Table
+t_td	CREATE TABLE `t_td` (
+  `pk` bigint NOT NULL,
+  `c0` int DEFAULT NULL,
+  PRIMARY KEY (`pk`),
+  KEY `c0` (`c0`)
+) ENGINE=TidesDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci /*!80021 ENGINE_ATTRIBUTE='{"tombstone_density_trigger": 2000}' */
+DROP TABLE t_td;
+#
+# === Session-default inheritance ===
+#
+# An option a table does not name is resolved from the session default when the table is
+# created, and the engine records the result in the table's own storage rather than the
+# server recording it in the definition -- so the inherited values do not appear in
+# SHOW CREATE TABLE here.  That they are settled at creation and not resolved again later
+# is what tidesdb_engine_attribute checks.
+SET SESSION tidesdb_default_tombstone_density_trigger = 4000;
+SET SESSION tidesdb_default_tombstone_density_min_entries = 256;
+CREATE TABLE t_default_td (pk BIGINT PRIMARY KEY, c0 INT) ENGINE=TIDESDB;
+INSERT INTO t_default_td VALUES (1, 1), (2, 2);
+DELETE FROM t_default_td WHERE pk = 1;
+SELECT pk, c0 FROM t_default_td ORDER BY pk;
+pk	c0
+2	2
+DROP TABLE t_default_td;
+SET SESSION tidesdb_default_tombstone_density_trigger = DEFAULT;
+SET SESSION tidesdb_default_tombstone_density_min_entries = DEFAULT;
+#
+# === Auto compact-after-range-delete session variable ===
+#
+SHOW VARIABLES LIKE 'tidesdb_compact_after_range_delete_min_rows';
+Variable_name	Value
+tidesdb_compact_after_range_delete_min_rows	0
+CREATE TABLE t_auto (
+pk BIGINT PRIMARY KEY,
+c0 INT,
+c1 INT,
+KEY (c0),
+KEY (c1)
+) ENGINE=TIDESDB;
+INSERT INTO t_auto (pk,c0,c1) VALUES
+(1,0,2),(2,1,4),(3,2,6),(4,3,8),(5,4,10),
+(6,5,12),(7,6,14),(8,7,16),(9,8,18),(10,9,20),
+(11,0,22),(12,1,24),(13,2,26),(14,3,28),(15,4,30),
+(16,5,32),(17,6,34),(18,7,36),(19,8,38),(20,9,40),
+(21,0,42),(22,1,44),(23,2,46),(24,3,48),(25,4,50),
+(26,5,52),(27,6,54),(28,7,56),(29,8,58),(30,9,60),
+(31,0,62),(32,1,64),(33,2,66),(34,3,68),(35,4,70),
+(36,5,72),(37,6,74),(38,7,76),(39,8,78),(40,9,80),
+(41,0,82),(42,1,84),(43,2,86),(44,3,88),(45,4,90),
+(46,5,92),(47,6,94),(48,7,96),(49,8,98),(50,9,100);
+INSERT INTO t_auto (pk,c0,c1) VALUES
+(51,0,102),(52,1,104),(53,2,106),(54,3,108),(55,4,110),
+(56,5,112),(57,6,114),(58,7,116),(59,8,118),(60,9,120),
+(61,0,122),(62,1,124),(63,2,126),(64,3,128),(65,4,130),
+(66,5,132),(67,6,134),(68,7,136),(69,8,138),(70,9,140),
+(71,0,142),(72,1,144),(73,2,146),(74,3,148),(75,4,150),
+(76,5,152),(77,6,154),(78,7,156),(79,8,158),(80,9,160),
+(81,0,162),(82,1,164),(83,2,166),(84,3,168),(85,4,170),
+(86,5,172),(87,6,174),(88,7,176),(89,8,178),(90,9,180),
+(91,0,182),(92,1,184),(93,2,186),(94,3,188),(95,4,190),
+(96,5,192),(97,6,194),(98,7,196),(99,8,198),(100,9,200);
+SELECT COUNT(*) FROM t_auto;
+COUNT(*)
+100
+# threshold below the deleted-row count, auto compact fires silently.
+# We assert reads remain correct after the synchronous compaction.
+SET SESSION tidesdb_compact_after_range_delete_min_rows = 20;
+DELETE FROM t_auto WHERE pk BETWEEN 30 AND 70;
+SELECT COUNT(*) FROM t_auto;
+COUNT(*)
+59
+SELECT pk FROM t_auto WHERE pk BETWEEN 28 AND 32 ORDER BY pk;
+pk
+28
+29
+71
+72
+73
+74
+75
+76
+77
+78
+79
+80
+81
+82
+83
+84
+85
+86
+87
+88
+89
+90
+91
+92
+93
+94
+95
+96
+97
+98
+99
+100
+SELECT pk FROM t_auto WHERE pk BETWEEN 68 AND 72 ORDER BY pk;
+pk
+71
+72
+73
+74
+75
+76
+77
+78
+79
+80
+81
+82
+83
+84
+85
+86
+87
+88
+89
+90
+91
+92
+93
+94
+95
+96
+97
+98
+99
+100
+SELECT pk FROM t_auto WHERE c0 = 5 AND pk < 70 ORDER BY pk;
+pk
+6
+16
+26
+SELECT pk FROM t_auto WHERE c1 = 134;
+pk
+# threshold above the deleted-row count, auto compact does NOT fire.
+SET SESSION tidesdb_compact_after_range_delete_min_rows = 1000000;
+DELETE FROM t_auto WHERE pk BETWEEN 75 AND 79;
+SELECT COUNT(*) FROM t_auto;
+COUNT(*)
+54
+SELECT pk FROM t_auto WHERE pk BETWEEN 73 AND 81 ORDER BY pk;
+pk
+73
+74
+80
+81
+82
+83
+84
+85
+86
+87
+88
+89
+90
+91
+92
+93
+94
+95
+96
+97
+98
+99
+100
+SET SESSION tidesdb_compact_after_range_delete_min_rows = DEFAULT;
+DROP TABLE t_auto;
+#
+# === Tombstone status variables exist and are non-negative ===
+#
+SELECT IF(VARIABLE_VALUE >= 0, 'ok', 'bad') AS total
+FROM performance_schema.global_status WHERE VARIABLE_NAME='TIDESDB_TOTAL_TOMBSTONES';
+total
+ok
+SELECT IF(VARIABLE_VALUE >= 0, 'ok', 'bad') AS ratio
+FROM performance_schema.global_status WHERE VARIABLE_NAME='TIDESDB_TOMBSTONE_RATIO';
+ratio
+ok
+SELECT IF(VARIABLE_VALUE >= 0, 'ok', 'bad') AS density
+FROM performance_schema.global_status WHERE VARIABLE_NAME='TIDESDB_MAX_SST_TOMBSTONE_DENSITY';
+density
+ok
+SELECT IF(VARIABLE_VALUE >= 0, 'ok', 'bad') AS density_level
+FROM performance_schema.global_status WHERE VARIABLE_NAME='TIDESDB_MAX_SST_TOMBSTONE_DENSITY_LEVEL';
+density_level
+ok
+# Done.

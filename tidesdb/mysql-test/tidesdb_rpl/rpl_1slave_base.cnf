@@ -1,0 +1,30 @@
+# Master and replica settings for the TideSQL replication suite.
+#
+# This mirrors the server's own suite/rpl/rpl_1slave_base.cnf rather than defining
+# anything new: the topology is one source and one replica, and the only reason the
+# file exists here is that a suite's my.cnf can only include a file it can see.
+
+!include include/default_mysqld.cnf
+!include include/default_client.cnf
+
+[mysqld.1]
+
+# Run the master.sh script before starting this process
+#!run-master-sh
+
+log-bin=                 master-bin
+
+[mysqld.2]
+# Run the slave.sh script before starting this process
+#!run-slave-sh
+
+# Append <testname>-slave.opt file to the list of argument used when
+# starting the mysqld
+#!use-slave-opt
+
+log-bin=                 slave-bin
+relay-log=               slave-relay-bin
+
+[ENV]
+MASTER_MYPORT=           @mysqld.1.port
+SLAVE_MYPORT=            @mysqld.2.port

@@ -1,0 +1,33 @@
+#
+# TEST 1: A checkpoint writes a directory that looks like a database
+#
+CREATE TABLE t_ckpt (id INT PRIMARY KEY, val VARCHAR(100)) ENGINE=TidesDB;
+INSERT INTO t_ckpt VALUES (1, 'before_checkpoint'), (2, 'data_two'), (3, 'data_three');
+checkpoint directory exists: YES
+manifest present: YES
+# and the variable reports the path it last wrote
+SELECT @@GLOBAL.tidesdb_checkpoint_dir IS NOT NULL AS checkpoint_dir_set;
+checkpoint_dir_set
+1
+#
+# TEST 2: The live database keeps working after the barrier
+#
+INSERT INTO t_ckpt VALUES (4, 'after_checkpoint');
+SELECT * FROM t_ckpt ORDER BY id;
+id	val
+1	before_checkpoint
+2	data_two
+3	data_three
+4	after_checkpoint
+#
+# TEST 3: Clear the variable
+#
+SET GLOBAL tidesdb_checkpoint_dir = '';
+SELECT @@GLOBAL.tidesdb_checkpoint_dir IS NULL AS checkpoint_dir_cleared;
+checkpoint_dir_cleared
+1
+#
+# Cleanup
+#
+DROP TABLE t_ckpt;
+# Done.

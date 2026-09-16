@@ -1,0 +1,169 @@
+#
+# A secondary index on a NO PAD collation
+#
+CREATE TABLE c_nopad (
+id INT PRIMARY KEY,
+s  VARCHAR(50) COLLATE utf8mb4_0900_ai_ci,
+KEY k (s)
+) ENGINE=TIDESDB;
+INSERT INTO c_nopad VALUES (1,'Alice'),(2,'Bob'),(3,'alice'),(4,'Zoe');
+# exact match finds the rows, and the collation's case-insensitivity holds
+SELECT id, s FROM c_nopad WHERE s = 'Alice' ORDER BY id;
+id	s
+1	Alice
+3	alice
+SELECT id, s FROM c_nopad WHERE s = 'ALICE' ORDER BY id;
+id	s
+1	Alice
+3	alice
+SELECT id, s FROM c_nopad WHERE s = 'Bob';
+id	s
+2	Bob
+# the index and a table scan must agree, which is what a wrong key breaks
+SELECT COUNT(*) AS via_index FROM c_nopad FORCE INDEX (k) WHERE s = 'Alice';
+via_index
+2
+SELECT COUNT(*) AS via_scan  FROM c_nopad IGNORE INDEX (k) WHERE s = 'Alice';
+via_scan
+2
+# ordering through the index
+SELECT s FROM c_nopad FORCE INDEX (k) ORDER BY s;
+s
+Alice
+alice
+Bob
+Zoe
+# a key built for the same value twice has to be the same key
+FLUSH TABLES;
+SELECT COUNT(*) AS found_after_reopen FROM c_nopad WHERE s = 'Alice';
+found_after_reopen
+2
+DROP TABLE c_nopad;
+#
+# A primary key on a NO PAD collation
+#
+CREATE TABLE pk_nopad (
+s VARCHAR(50) COLLATE utf8mb4_0900_ai_ci PRIMARY KEY,
+v INT
+) ENGINE=TIDESDB;
+INSERT INTO pk_nopad VALUES ('Alice',1),('Bob',2);
+SELECT s, v FROM pk_nopad WHERE s = 'Alice';
+s	v
+Alice	1
+UPDATE pk_nopad SET v = 10 WHERE s = 'Alice';
+SELECT s, v FROM pk_nopad WHERE s = 'Alice';
+s	v
+Alice	10
+DELETE FROM pk_nopad WHERE s = 'Bob';
+SELECT s, v FROM pk_nopad ORDER BY s;
+s	v
+Alice	10
+DROP TABLE pk_nopad;
+#
+# A UNIQUE index on a NO PAD collation must still refuse a duplicate
+#
+CREATE TABLE uq_nopad (
+id INT PRIMARY KEY,
+s  VARCHAR(50) COLLATE utf8mb4_0900_ai_ci,
+UNIQUE KEY u (s)
+) ENGINE=TIDESDB;
+INSERT INTO uq_nopad VALUES (1,'Alice');
+INSERT INTO uq_nopad VALUES (2,'Alice');
+ERROR 23000: Duplicate entry 'Alice' for key 'uq_nopad.u'
+# and the collation decides what counts as a duplicate
+INSERT INTO uq_nopad VALUES (3,'ALICE');
+ERROR 23000: Duplicate entry 'ALICE' for key 'uq_nopad.u'
+INSERT INTO uq_nopad VALUES (4,'Bob');
+SELECT id, s FROM uq_nopad ORDER BY id;
+id	s
+1	Alice
+4	Bob
+DROP TABLE uq_nopad;
+#
+# Values of differing length, where the padding rule is what decides order
+#
+CREATE TABLE len_nopad (
+id INT PRIMARY KEY,
+s  VARCHAR(50) COLLATE utf8mb4_0900_ai_ci,
+KEY k (s)
+) ENGINE=TIDESDB;
+INSERT INTO len_nopad VALUES (1,''),(2,'A'),(3,'AB'),(4,'ABC');
+SELECT id, CONCAT('[', s, ']') AS v FROM len_nopad FORCE INDEX (k) ORDER BY s, id;
+id	v
+1	[]
+2	[A]
+3	[AB]
+4	[ABC]
+SELECT id FROM len_nopad WHERE s = '';
+id
+1
+SELECT id FROM len_nopad WHERE s = 'A';
+id
+2
+SELECT id FROM len_nopad WHERE s = 'AB';
+id
+3
+DROP TABLE len_nopad;
+#
+# A CHAR column, which pads even under a NO PAD collation
+#
+CREATE TABLE ch_nopad (
+id INT PRIMARY KEY,
+s  CHAR(20) COLLATE utf8mb4_0900_ai_ci,
+KEY k (s)
+) ENGINE=TIDESDB;
+INSERT INTO ch_nopad VALUES (1,'Alice'),(2,'Bob');
+SELECT id, s FROM ch_nopad WHERE s = 'Alice';
+id	s
+1	Alice
+DROP TABLE ch_nopad;
+#
+# A composite key and a prefix key, which encode their parts differently
+#
+CREATE TABLE mc_nopad (
+id INT PRIMARY KEY,
+a  VARCHAR(50) COLLATE utf8mb4_0900_ai_ci,
+b  VARCHAR(50) COLLATE utf8mb4_0900_ai_ci,
+KEY ab (a, b),
+KEY pre (b(10))
+) ENGINE=TIDESDB;
+INSERT INTO mc_nopad VALUES (1,'alpha','beta'),(2,'alpha','gamma'),(3,'delta','beta');
+# both parts of the composite key
+SELECT id FROM mc_nopad FORCE INDEX (ab) WHERE a = 'alpha' AND b = 'beta';
+id
+1
+# the leading part alone
+SELECT id FROM mc_nopad FORCE INDEX (ab) WHERE a = 'alpha' ORDER BY id;
+id
+1
+2
+# a prefix key, whose entries are truncated to the prefix length
+SELECT id FROM mc_nopad FORCE INDEX (pre) WHERE b = 'beta' ORDER BY id;
+id
+1
+3
+# a range, which compares the encoded parts rather than seeking one
+SELECT id FROM mc_nopad FORCE INDEX (ab) WHERE a >= 'alpha' AND a < 'z' ORDER BY id;
+id
+1
+2
+3
+DROP TABLE mc_nopad;
+#
+# A padding collation still behaves as it did
+#
+CREATE TABLE c_pad (
+id INT PRIMARY KEY,
+s  VARCHAR(50) COLLATE utf8mb4_general_ci,
+KEY k (s)
+) ENGINE=TIDESDB;
+INSERT INTO c_pad VALUES (1,'Alice'),(2,'Bob');
+SELECT id, s FROM c_pad WHERE s = 'Alice';
+id	s
+1	Alice
+SELECT s FROM c_pad FORCE INDEX (k) ORDER BY s;
+s
+Alice
+Bob
+DROP TABLE c_pad;
+# Done.

@@ -1,0 +1,60 @@
+# ----------------------------------------------------------------------
+# Setup
+# Creating local configuration file for keyring component: component_keyring_file
+# Creating manifest file for current MySQL server instance
+# Re-starting mysql server with manifest file
+# ----------------------------------------------------------------------
+#
+# rows encrypted under key version 1
+#
+CREATE TABLE enc (id INT PRIMARY KEY, payload VARCHAR(200)) ENGINE=TidesDB ENGINE_ATTRIBUTE='{"encrypted": true}';
+INSERT INTO enc VALUES (1,'written under version one'),(2,'also version one');
+SELECT * FROM enc ORDER BY id;
+id	payload
+1	written under version one
+2	also version one
+#
+# rotate the key, then write rows under key version 2
+#
+SET GLOBAL tidesdb_rotate_table_key = 1;
+INSERT INTO enc VALUES (3,'written under version two'),(4,'also version two');
+# all four rows decrypt, the first two under v1 and the rest under v2
+SELECT * FROM enc ORDER BY id;
+id	payload
+1	written under version one
+2	also version one
+3	written under version two
+4	also version two
+#
+# rotate again and confirm all three key vintages still read back
+#
+SET GLOBAL tidesdb_rotate_table_key = 1;
+INSERT INTO enc VALUES (5,'written under version three');
+SELECT * FROM enc ORDER BY id;
+id	payload
+1	written under version one
+2	also version one
+3	written under version two
+4	also version two
+5	written under version three
+#
+# a fresh open of the table still reads every version
+#
+FLUSH TABLES;
+SELECT * FROM enc ORDER BY id;
+id	payload
+1	written under version one
+2	also version one
+3	written under version two
+4	also version two
+5	written under version three
+DROP TABLE enc;
+SET GLOBAL tidesdb_rotate_table_key = DEFAULT;
+# ----------------------------------------------------------------------
+# Teardown
+# Removing manifest file for current MySQL server instance
+# Removing local keyring file for keyring component: component_keyring_file
+# Removing local configuration file for keyring component: component_keyring_file
+# Restarting server without the manifest file
+# ----------------------------------------------------------------------
+# Done.

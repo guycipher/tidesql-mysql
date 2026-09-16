@@ -1,0 +1,79 @@
+--source ../include/have_tidesdb.inc
+#
+# LOCK TABLES, and the create options a dump has to carry.
+#
+# LOCK TABLES takes the table lock once and holds it across many statements, so
+# the engine's external_lock runs at LOCK TABLES and again at UNLOCK TABLES and
+# not in between.  Everything a statement needs -- its transaction, the cached
+# pointers, the statement savepoint -- is set up per statement, which under a
+# held lock happens in start_stmt instead.  Without that every statement here
+# runs with no transaction and the first row operation is handed a null handle.
+#
+# Nothing else in the suite uses LOCK TABLES, which is why this needs its own
+# file rather than a few lines somewhere else.
+#
+
+--echo #
+--echo # Every kind of statement under a write lock
+--echo #
+CREATE TABLE lt (
+  id INT PRIMARY KEY AUTO_INCREMENT,
+  v  INT,
+  KEY k (v)
+) ENGINE=TIDESDB;
+INSERT INTO lt (v) VALUES (1),(2),(3);
+
+LOCK TABLES lt WRITE;
+SELECT COUNT(*) AS rows_seen FROM lt;
+INSERT INTO lt (v) VALUES (4);
+UPDATE lt SET v = v + 10 WHERE id = 1;
+DELETE FROM lt WHERE id = 2;
+--echo # through the primary key
+SELECT id, v FROM lt ORDER BY id;
+--echo # and through a secondary index, which needs its own iterator per statement
+SELECT id, v FROM lt FORCE INDEX (k) ORDER BY v;
+UNLOCK TABLES;
+
+--echo # the work is visible once the lock is released
+SELECT id, v FROM lt ORDER BY id;
+
+--echo #
+--echo # A read lock
+--echo #
+LOCK TABLES lt READ;
+SELECT COUNT(*) AS rows_seen FROM lt;
+SELECT id, v FROM lt FORCE INDEX (k) ORDER BY v;
+UNLOCK TABLES;
+
+--echo #
+--echo # Two tables locked at once, written in one statement each
+--echo #
+CREATE TABLE lt2 (id INT PRIMARY KEY, s VARCHAR(20)) ENGINE=TIDESDB;
+LOCK TABLES lt WRITE, lt2 WRITE;
+INSERT INTO lt (v) VALUES (5);
+INSERT INTO lt2 VALUES (1,'a'),(2,'b');
+SELECT COUNT(*) AS lt_rows FROM lt;
+SELECT COUNT(*) AS lt2_rows FROM lt2;
+UNLOCK TABLES;
+
+--echo #
+--echo # An explicit transaction under a held lock, and a rollback inside it
+--echo #
+LOCK TABLES lt2 WRITE;
+BEGIN;
+INSERT INTO lt2 VALUES (3,'c');
+SELECT COUNT(*) AS during_txn FROM lt2;
+ROLLBACK;
+SELECT COUNT(*) AS after_rollback FROM lt2;
+UNLOCK TABLES;
+
+--echo #
+--echo # The auto-increment counter reaches SHOW CREATE TABLE, so a dump carries it
+--echo #
+--replace_regex /AUTO_INCREMENT=[0-9]+/AUTO_INCREMENT=N/
+SHOW CREATE TABLE lt;
+
+DROP TABLE lt, lt2;
+
+--source ../include/cleanup_tidesdb.inc
+--echo # Done.

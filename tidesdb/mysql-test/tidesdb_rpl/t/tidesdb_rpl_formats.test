@@ -1,0 +1,80 @@
+--source include/rpl/init_source_replica.inc
+#
+# Replication in STATEMENT and MIXED binlog format.
+#
+# The engine declares itself both row and statement binlog capable
+# (HA_BINLOG_STMT_CAPABLE | HA_BINLOG_ROW_CAPABLE), and the manual says all
+# three formats work.  The rest of the suite runs in ROW, so without this the
+# statement half of that claim is never exercised: a wrongly declared capability
+# shows up as an unsafe-statement warning or a replica that silently diverges,
+# neither of which a row-format test can see.
+#
+
+--echo #
+--echo # STATEMENT format
+--echo #
+--connection master
+--disable_warnings
+SET SESSION binlog_format = STATEMENT;
+--enable_warnings
+--disable_warnings
+SELECT @@SESSION.binlog_format AS binlog_format;
+--enable_warnings
+
+CREATE TABLE s1 (id INT PRIMARY KEY, v INT, s VARCHAR(32)) ENGINE=TidesDB;
+INSERT INTO s1 VALUES (1, 10, 'one'), (2, 20, 'two'), (3, 30, 'three');
+UPDATE s1 SET v = v + 1 WHERE id <= 2;
+DELETE FROM s1 WHERE id = 3;
+
+--echo # a multi-statement transaction in statement format
+BEGIN;
+INSERT INTO s1 VALUES (4, 40, 'four');
+UPDATE s1 SET s = 'four-b' WHERE id = 4;
+COMMIT;
+
+--source include/rpl/sync_to_replica.inc
+--connection slave
+--echo # replica rows after statement-format replication
+SELECT id, v, s FROM s1 ORDER BY id;
+
+--echo #
+--echo # MIXED format
+--echo #
+--connection master
+--disable_warnings
+SET SESSION binlog_format = MIXED;
+SELECT @@SESSION.binlog_format AS binlog_format;
+--enable_warnings
+
+CREATE TABLE m1 (id INT PRIMARY KEY AUTO_INCREMENT, v INT, s VARCHAR(32)) ENGINE=TidesDB;
+INSERT INTO m1 (v, s) VALUES (1, 'a'), (2, 'b'), (3, 'c');
+--echo # UUID() is unsafe for statement format, so MIXED must switch this row to
+--echo # row format rather than ship the statement
+UPDATE m1 SET s = LEFT(UUID(), 0) WHERE id = 1;
+DELETE FROM m1 WHERE id = 3;
+
+--source include/rpl/sync_to_replica.inc
+--connection slave
+--echo # replica rows after mixed-format replication
+SELECT id, v, s FROM m1 ORDER BY id;
+
+--echo #
+--echo # source and replica agree byte for byte
+--echo #
+--connection master
+--let $mc= `CHECKSUM TABLE s1 EXTENDED`
+--connection slave
+--let $sc= `CHECKSUM TABLE s1 EXTENDED`
+if ($mc == $sc)
+{
+  --echo # extended checksums match on source and replica
+}
+if ($mc != $sc)
+{
+  --echo MISMATCH source=$mc replica=$sc
+}
+
+--connection master
+DROP TABLE s1, m1;
+--source include/rpl/sync_to_replica.inc
+--source include/rpl/deinit.inc

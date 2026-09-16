@@ -1,0 +1,99 @@
+---
+title: Limitations
+description: What TideSQL does not do on this server, and the behaviors to plan around.
+---
+
+# Limitations
+
+## Not available on this server
+
+These are capabilities the server does not offer an engine, rather than choices TideSQL made. Each
+is refused clearly rather than accepted and quietly ignored.
+
+**Partitioned tables.** This server has no general partitioning layer, and TideSQL does not
+implement native partitioning of its own, so every partitioned `CREATE TABLE` is refused. See
+[Partitioning](/administration/partitioning) for what to use instead.
+
+**System-versioned tables.** The server has no system versioning, so `WITH SYSTEM VERSIONING` does
+not parse.
+
+**Vector search.** `VECTOR` columns are stored and returned normally, but the server has no vector
+index and no distance function, so there is no nearest-neighbour query for the engine to answer.
+See [Vector Columns](/reference/vector-search).
+
+**Multi-primary clustering.** The server carries no write-set replication integration, so there is
+nothing for the engine to participate in. Source-and-replica topologies work normally. See
+[Replication and High Availability](/administration/replication-ha).
+
+**Bulk load.** `LOAD DATA ... ALGORITHM = BULK` is refused before any engine is reached:
+
+```
+ERROR 1235 (42000): This version of MySQL doesn't yet support 'Bulk Load'
+```
+
+The server's bulk loader is driven by a `bulk_load_driver` component. The service is declared in the
+server's headers but no component in a community build implements it, so the statement fails while
+checking for the driver and the engine's side of the interface is never called. Ordinary `LOAD DATA`
+works and is the way to load a TideSQL table.
+
+**Parallel scan.** The server declares a parallel-scan interface an engine may offer, but nothing in
+the server calls it — it is used by InnoDB on itself, and by a loader that is not part of a
+community build. There is no statement that would reach the engine through it, so TideSQL does not
+implement it. Scans within one statement are single-threaded; concurrent statements scan
+concurrently as usual.
+
+## Behaviours to plan around
+
+**Write conflicts surface at commit and are the application's to retry.** Concurrency is optimistic
+MVCC, so a transaction can fail at commit with a first-committer-wins conflict, which reaches the
+client as `ER_ERROR_DURING_COMMIT` (1180):
+
+```
+ERROR 1180 (HY000): Got error 149 - 'Lock deadlock; Retry transaction' during COMMIT
+```
+
+This applies to autocommit statements as much as to explicit `BEGIN ... COMMIT` blocks — an
+autocommit statement is a transaction too, and it validates its writes for the same reason. The
+server does not retry it for you, so any application writing concurrently to the same rows needs
+retry logic for 1180. There are no pessimistic row locks, so there are no lock waits and no
+lock-wait deadlocks to tune. See [Transactions and Isolation](/concepts/transactions).
+
+**`READ COMMITTED` does not detect write conflicts.** A session that asks for it explicitly gets a
+level at which a write is a blind overwrite: if another transaction wrote the same row first, that
+write is lost. That is the documented behaviour of the level and the right trade for appending
+independent records, but it is not a level to run read-modify-write traffic at.
+
+**Foreign keys carry two shape restrictions.** TideSQL enforces foreign keys inside the engine,
+including `ON DELETE` and `ON UPDATE` with `CASCADE`, `SET NULL`, and `RESTRICT`, references to a
+primary key or to a non-nullable unique key, and self-references. Two constraint shapes are rejected
+at `CREATE TABLE` and `ALTER TABLE`. A foreign key column declared with descending order is not
+allowed, because the engine matches child rows against a forward sort key. A foreign key that
+references a nullable unique key is not allowed either, because the value-only child probe cannot
+reproduce that key's null indicator. Everything else behaves as in InnoDB. See
+[Foreign Keys](/reference/foreign-keys).
+
+**Changing the primary key or a column type needs a full copy.** The engine does not support an
+inplace primary-key change, and changing a column type such as `INT` to `BIGINT` also rebuilds the
+table by copy. See [Online DDL](/administration/online-ddl).
+
+**Statistics are cached for up to two seconds.** Right after a bulk load the optimizer may briefly
+see stale row counts. `ANALYZE TABLE` forces an immediate refresh.
+
+**A killed query is noticed at the next row boundary.** The server's pushed-condition interface here
+has no state for reporting a kill, so an index scan evaluating a pushed condition observes
+`KILL` at the row boundary the scan already checks rather than inside condition evaluation. The
+difference is one row.
+
+**Index condition pushdown is taken; whole-condition pushdown is not.** A condition on the columns
+of the index being scanned is pushed into the engine and evaluated against the index entry, which
+skips the row fetch for an entry that cannot match — that is the pushdown worth having, and TideSQL
+implements it. The separate interface for pushing an entire `WHERE` clause is offered only to
+single-table `UPDATE` and `DELETE`, and the server evaluates the clause again for every row the
+engine returns regardless of what the engine reports back. Taking it would duplicate work the server
+repeats anyway and would evaluate user expressions twice, so TideSQL leaves it alone, as InnoDB
+does. `EXPLAIN` accordingly shows `Using index condition` but never `Using pushed condition`.
+
+**The plugin may need the allocator preloaded to load at all.** When the linked TidesDB library was
+built against `jemalloc`, `mimalloc` or `tcmalloc`, the plugin cannot be `dlopen`ed without the
+allocator already in the process image. See [Installing TideSQL](/getting-started/install), which
+has the exact error and the fix.

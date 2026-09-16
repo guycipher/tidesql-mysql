@@ -1,0 +1,46 @@
+--source ../include/have_tidesdb.inc
+--source ../include/have_tidesdb_encryption.inc
+#
+# Encrypted rows must remain readable after an encryption key rotation.
+# Every encrypted row stores the key version it was written under, so a
+# row encrypted before a rotation still decrypts with its original key
+# instead of the current latest one.  The engine owns the keys here, and a
+# rotation is asked for through SET GLOBAL tidesdb_rotate_table_key, which mints
+# the next version of that key without reading or rewriting a single row.
+#
+
+--echo #
+--echo # rows encrypted under key version 1
+--echo #
+CREATE TABLE enc (id INT PRIMARY KEY, payload VARCHAR(200)) ENGINE=TidesDB ENGINE_ATTRIBUTE='{"encrypted": true}';
+INSERT INTO enc VALUES (1,'written under version one'),(2,'also version one');
+SELECT * FROM enc ORDER BY id;
+
+--echo #
+--echo # rotate the key, then write rows under key version 2
+--echo #
+SET GLOBAL tidesdb_rotate_table_key = 1;
+INSERT INTO enc VALUES (3,'written under version two'),(4,'also version two');
+
+--echo # all four rows decrypt, the first two under v1 and the rest under v2
+SELECT * FROM enc ORDER BY id;
+
+--echo #
+--echo # rotate again and confirm all three key vintages still read back
+--echo #
+SET GLOBAL tidesdb_rotate_table_key = 1;
+INSERT INTO enc VALUES (5,'written under version three');
+SELECT * FROM enc ORDER BY id;
+
+--echo #
+--echo # a fresh open of the table still reads every version
+--echo #
+FLUSH TABLES;
+SELECT * FROM enc ORDER BY id;
+
+DROP TABLE enc;
+SET GLOBAL tidesdb_rotate_table_key = DEFAULT;
+
+--source ../include/cleanup_tidesdb.inc
+--source ../include/cleanup_tidesdb_encryption.inc
+--echo # Done.

@@ -1,0 +1,90 @@
+#
+# A histogram over a table small enough to be read whole
+#
+CREATE TABLE hs (id INT PRIMARY KEY AUTO_INCREMENT, v INT) ENGINE=TIDESDB;
+INSERT INTO hs (v) VALUES (1),(2),(3),(4),(5),(6),(7),(8),(9),(10);
+INSERT INTO hs (v) SELECT v+10 FROM hs;
+INSERT INTO hs (v) SELECT v+20 FROM hs;
+INSERT INTO hs (v) SELECT v+40 FROM hs;
+SELECT COUNT(*) AS rows_loaded, MIN(v) AS lo, MAX(v) AS hi FROM hs;
+rows_loaded	lo	hi
+80	1	80
+ANALYZE TABLE hs UPDATE HISTOGRAM ON v WITH 8 BUCKETS;
+Table	Op	Msg_type	Msg_text
+test.hs	histogram	status	Histogram statistics created for column 'v'.
+# the histogram exists, with the shape that was asked for
+SELECT JSON_EXTRACT(HISTOGRAM, '$."number-of-buckets-specified"') AS buckets,
+JSON_UNQUOTE(JSON_EXTRACT(HISTOGRAM, '$."histogram-type"')) AS histogram_type
+FROM information_schema.COLUMN_STATISTICS
+WHERE SCHEMA_NAME = DATABASE() AND TABLE_NAME = 'hs' AND COLUMN_NAME = 'v';
+buckets	histogram_type
+8	equi-height
+# and it spans exactly the values the column holds
+SELECT MIN(CAST(JSON_UNQUOTE(JSON_EXTRACT(b.bucket, '$[0]')) AS SIGNED)) AS histogram_lo,
+MAX(CAST(JSON_UNQUOTE(JSON_EXTRACT(b.bucket, '$[1]')) AS SIGNED)) AS histogram_hi
+FROM information_schema.COLUMN_STATISTICS s,
+JSON_TABLE(JSON_EXTRACT(s.HISTOGRAM, '$.buckets'), '$[*]'
+                COLUMNS (bucket JSON PATH '$')) b
+WHERE s.SCHEMA_NAME = DATABASE() AND s.TABLE_NAME = 'hs' AND s.COLUMN_NAME = 'v';
+histogram_lo	histogram_hi
+1	80
+#
+# A histogram the server samples rather than reads whole
+#
+# The memory budget is dropped so the table is over it and the server asks
+# for a fraction of the rows, which is the path that skips without decoding.
+CREATE TABLE big (id INT PRIMARY KEY AUTO_INCREMENT, v INT, pad CHAR(120)) ENGINE=TIDESDB;
+SELECT COUNT(*) AS rows_loaded FROM big;
+rows_loaded
+32768
+# The row estimate the server divides the budget by is cached and refreshed on
+# a timer, so a plain ANALYZE forces it current after the load.  Its report
+# counts bytes written, which no two runs agree on.
+ANALYZE TABLE big;
+# The budget is a session variable, so ANALYZE reads the value set here.
+SET SESSION histogram_generation_max_mem_size = 1000000;
+ANALYZE TABLE big UPDATE HISTOGRAM ON v WITH 16 BUCKETS;
+Table	Op	Msg_type	Msg_text
+test.big	histogram	status	Histogram statistics created for column 'v'.
+# the server took a partial sample
+SELECT JSON_EXTRACT(HISTOGRAM, '$."sampling-rate"') < 1.0 AS sampled_a_fraction
+FROM information_schema.COLUMN_STATISTICS
+WHERE SCHEMA_NAME = DATABASE() AND TABLE_NAME = 'big' AND COLUMN_NAME = 'v';
+sampled_a_fraction
+1
+# A sample is not the whole column, so the histogram is not expected to reach
+# both ends of it.  What it may never do is leave the column's range: every
+# bound in it has to be a value that is really in the table, which it can only
+# be if the rows the engine handed back were real rows read at the right place.
+SELECT h.lo >= t.lo               AS lo_in_range,
+h.hi <= t.hi               AS hi_in_range,
+h.lo <= h.hi               AS ordered,
+(h.hi - h.lo) > (t.hi - t.lo) * 0.9 AS spans_most_of_column
+FROM (SELECT MIN(CAST(JSON_UNQUOTE(JSON_EXTRACT(b.bucket, '$[0]')) AS SIGNED)) AS lo,
+MAX(CAST(JSON_UNQUOTE(JSON_EXTRACT(b.bucket, '$[1]')) AS SIGNED)) AS hi
+FROM information_schema.COLUMN_STATISTICS s,
+JSON_TABLE(JSON_EXTRACT(s.HISTOGRAM, '$.buckets'), '$[*]'
+                        COLUMNS (bucket JSON PATH '$')) b
+WHERE s.SCHEMA_NAME = DATABASE() AND s.TABLE_NAME = 'big'
+         AND s.COLUMN_NAME = 'v') h,
+(SELECT MIN(v) AS lo, MAX(v) AS hi FROM big) t;
+lo_in_range	hi_in_range	ordered	spans_most_of_column
+1	1	1	1
+#
+# A table with no rows at all
+#
+CREATE TABLE he (id INT PRIMARY KEY, v INT) ENGINE=TIDESDB;
+ANALYZE TABLE he UPDATE HISTOGRAM ON v WITH 4 BUCKETS;
+Table	Op	Msg_type	Msg_text
+test.he	histogram	status	Histogram statistics created for column 'v'.
+SELECT COUNT(*) AS rows_in_table FROM he;
+rows_in_table
+0
+# and it still reads and writes normally afterwards
+INSERT INTO he VALUES (1,10),(2,20);
+SELECT id, v FROM he ORDER BY id;
+id	v
+1	10
+2	20
+DROP TABLE hs, big, he;
+# Done.

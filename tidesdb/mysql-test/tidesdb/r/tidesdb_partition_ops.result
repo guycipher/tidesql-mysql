@@ -1,0 +1,29 @@
+CREATE TABLE p (id INT NOT NULL, v INT, PRIMARY KEY (id)) ENGINE=TIDESDB;
+INSERT INTO p VALUES (1, 10), (2, 20), (3, 30);
+#
+# Every partition-management ALTER is refused
+#
+ALTER TABLE p PARTITION BY RANGE (id) (
+PARTITION p0 VALUES LESS THAN (10),
+PARTITION p1 VALUES LESS THAN MAXVALUE
+);
+ERROR 42000: The storage engine for the table doesn't support native partitioning
+ALTER TABLE p ADD PARTITION (PARTITION p2 VALUES LESS THAN (30));
+ERROR HY000: Partition management on a not partitioned table is not possible
+ALTER TABLE p DROP PARTITION p1;
+ERROR HY000: Partition management on a not partitioned table is not possible
+ALTER TABLE p TRUNCATE PARTITION p1;
+ERROR HY000: Partition management on a not partitioned table is not possible
+ALTER TABLE p REORGANIZE PARTITION p1 INTO (
+PARTITION p1a VALUES LESS THAN (20),
+PARTITION p1b VALUES LESS THAN MAXVALUE
+);
+ERROR HY000: Partition management on a not partitioned table is not possible
+# The table is untouched by any of the refusals
+SELECT * FROM p ORDER BY id;
+id	v
+1	10
+2	20
+3	30
+DROP TABLE p;
+# Done.

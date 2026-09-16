@@ -1,0 +1,105 @@
+--source ../include/have_tidesdb.inc
+#
+# Row sampling, which the server uses to build a histogram.
+#
+# The engine takes the sampling itself rather than letting the server read every
+# row and throw most away: the choice is made from the key, and a row the dice
+# reject is never fetched or decoded.  What must not change is the answer -- a
+# histogram built from a sample still has to describe the column.
+#
+# The assertions are invariants rather than exact numbers, because the sampling
+# rate the server picks depends on the table size against its histogram memory
+# budget, and the rows a sample selects depend on the seed it chose.
+#
+
+--echo #
+--echo # A histogram over a table small enough to be read whole
+--echo #
+CREATE TABLE hs (id INT PRIMARY KEY AUTO_INCREMENT, v INT) ENGINE=TIDESDB;
+INSERT INTO hs (v) VALUES (1),(2),(3),(4),(5),(6),(7),(8),(9),(10);
+INSERT INTO hs (v) SELECT v+10 FROM hs;
+INSERT INTO hs (v) SELECT v+20 FROM hs;
+INSERT INTO hs (v) SELECT v+40 FROM hs;
+SELECT COUNT(*) AS rows_loaded, MIN(v) AS lo, MAX(v) AS hi FROM hs;
+
+ANALYZE TABLE hs UPDATE HISTOGRAM ON v WITH 8 BUCKETS;
+
+--echo # the histogram exists, with the shape that was asked for
+SELECT JSON_EXTRACT(HISTOGRAM, '$."number-of-buckets-specified"') AS buckets,
+       JSON_UNQUOTE(JSON_EXTRACT(HISTOGRAM, '$."histogram-type"')) AS histogram_type
+FROM information_schema.COLUMN_STATISTICS
+WHERE SCHEMA_NAME = DATABASE() AND TABLE_NAME = 'hs' AND COLUMN_NAME = 'v';
+
+--echo # and it spans exactly the values the column holds
+SELECT MIN(CAST(JSON_UNQUOTE(JSON_EXTRACT(b.bucket, '$[0]')) AS SIGNED)) AS histogram_lo,
+       MAX(CAST(JSON_UNQUOTE(JSON_EXTRACT(b.bucket, '$[1]')) AS SIGNED)) AS histogram_hi
+FROM information_schema.COLUMN_STATISTICS s,
+     JSON_TABLE(JSON_EXTRACT(s.HISTOGRAM, '$.buckets'), '$[*]'
+                COLUMNS (bucket JSON PATH '$')) b
+WHERE s.SCHEMA_NAME = DATABASE() AND s.TABLE_NAME = 'hs' AND s.COLUMN_NAME = 'v';
+
+--echo #
+--echo # A histogram the server samples rather than reads whole
+--echo #
+--echo # The memory budget is dropped so the table is over it and the server asks
+--echo # for a fraction of the rows, which is the path that skips without decoding.
+CREATE TABLE big (id INT PRIMARY KEY AUTO_INCREMENT, v INT, pad CHAR(120)) ENGINE=TIDESDB;
+--disable_query_log
+INSERT INTO big (v,pad) VALUES (1,'x'),(2,'x'),(3,'x'),(4,'x'),(5,'x'),(6,'x'),(7,'x'),(8,'x');
+let $i = 12;
+while ($i)
+{
+  eval INSERT INTO big (v,pad) SELECT v + (SELECT COUNT(*) FROM big), pad FROM big;
+  dec $i;
+}
+--enable_query_log
+SELECT COUNT(*) AS rows_loaded FROM big;
+
+--echo # The row estimate the server divides the budget by is cached and refreshed on
+--echo # a timer, so a plain ANALYZE forces it current after the load.  Its report
+--echo # counts bytes written, which no two runs agree on.
+--disable_result_log
+ANALYZE TABLE big;
+--enable_result_log
+
+--echo # The budget is a session variable, so ANALYZE reads the value set here.
+SET SESSION histogram_generation_max_mem_size = 1000000;
+ANALYZE TABLE big UPDATE HISTOGRAM ON v WITH 16 BUCKETS;
+
+--echo # the server took a partial sample
+SELECT JSON_EXTRACT(HISTOGRAM, '$."sampling-rate"') < 1.0 AS sampled_a_fraction
+FROM information_schema.COLUMN_STATISTICS
+WHERE SCHEMA_NAME = DATABASE() AND TABLE_NAME = 'big' AND COLUMN_NAME = 'v';
+
+--echo # A sample is not the whole column, so the histogram is not expected to reach
+--echo # both ends of it.  What it may never do is leave the column's range: every
+--echo # bound in it has to be a value that is really in the table, which it can only
+--echo # be if the rows the engine handed back were real rows read at the right place.
+SELECT h.lo >= t.lo               AS lo_in_range,
+       h.hi <= t.hi               AS hi_in_range,
+       h.lo <= h.hi               AS ordered,
+       (h.hi - h.lo) > (t.hi - t.lo) * 0.9 AS spans_most_of_column
+FROM (SELECT MIN(CAST(JSON_UNQUOTE(JSON_EXTRACT(b.bucket, '$[0]')) AS SIGNED)) AS lo,
+             MAX(CAST(JSON_UNQUOTE(JSON_EXTRACT(b.bucket, '$[1]')) AS SIGNED)) AS hi
+        FROM information_schema.COLUMN_STATISTICS s,
+             JSON_TABLE(JSON_EXTRACT(s.HISTOGRAM, '$.buckets'), '$[*]'
+                        COLUMNS (bucket JSON PATH '$')) b
+       WHERE s.SCHEMA_NAME = DATABASE() AND s.TABLE_NAME = 'big'
+         AND s.COLUMN_NAME = 'v') h,
+     (SELECT MIN(v) AS lo, MAX(v) AS hi FROM big) t;
+
+--echo #
+--echo # A table with no rows at all
+--echo #
+CREATE TABLE he (id INT PRIMARY KEY, v INT) ENGINE=TIDESDB;
+ANALYZE TABLE he UPDATE HISTOGRAM ON v WITH 4 BUCKETS;
+SELECT COUNT(*) AS rows_in_table FROM he;
+
+--echo # and it still reads and writes normally afterwards
+INSERT INTO he VALUES (1,10),(2,20);
+SELECT id, v FROM he ORDER BY id;
+
+DROP TABLE hs, big, he;
+
+--source ../include/cleanup_tidesdb.inc
+--echo # Done.

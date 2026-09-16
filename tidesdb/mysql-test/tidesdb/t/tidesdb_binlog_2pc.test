@@ -1,0 +1,79 @@
+--source ../include/have_tidesdb.inc
+#
+# Committing with binary logging on, which puts every transaction through
+# two-phase commit.
+#
+# Without a binary log the server commits the engine directly and prepare() is
+# never called, so the whole 2PC path goes untested -- which is how this bug
+# lived: a statement large enough to trigger a mid-statement bulk commit leaves
+# the engine's transaction empty but still marked as having uncommitted writes.
+# Under 2PC the prepare of an empty batch is resolved by the library as
+# read-only, and the commit that follows is then handed an already-resolved
+# transaction and fails with "Internal (unspecified) error in handler".
+#
+# The row counts matter as much as the commit succeeding: a transaction that
+# commits in pieces must still land every row.
+#
+
+--echo # binary logging is on, so each commit below is prepare + commit
+SELECT @@GLOBAL.log_bin AS log_bin;
+
+CREATE TABLE b2 (
+  id INT PRIMARY KEY,
+  v  VARCHAR(32),
+  d  DECIMAL(16,6),
+  KEY k_v (v),
+  KEY k_d (d)
+) ENGINE=TIDESDB;
+
+--echo #
+--echo # A transaction whose last statement commits in pieces
+--echo #
+--echo # Each row carries its secondary-index writes into the same batch, so a
+--echo # few hundred updated rows cross the mid-statement flush threshold and the
+--echo # flush lands on the final row -- leaving the engine's transaction empty
+--echo # at COMMIT, which is the case that used to fail.
+BEGIN;
+--disable_query_log
+let $i = 1;
+while ($i <= 200)
+{
+  eval INSERT INTO b2 (id, v, d) VALUES (1000 + $i, CONCAT('row', $i), $i + 0.5);
+  inc $i;
+}
+--enable_query_log
+UPDATE b2 SET v = 'batched' WHERE id BETWEEN 1001 AND 1100;
+COMMIT;
+
+SELECT COUNT(*) AS rows_total, SUM(id) AS sum_id FROM b2;
+SELECT COUNT(*) AS batched FROM b2 WHERE v = 'batched';
+--echo # and the secondary indexes agree with the rows
+SELECT COUNT(*) AS by_index FROM b2 FORCE INDEX (k_v) WHERE v = 'batched';
+
+--echo #
+--echo # and a rollback of the same shape discards all of it
+--echo #
+BEGIN;
+--disable_query_log
+let $i = 1;
+while ($i <= 200)
+{
+  eval INSERT INTO b2 (id, v, d) VALUES (5000 + $i, CONCAT('r', $i), $i);
+  inc $i;
+}
+--enable_query_log
+ROLLBACK;
+
+--echo # a bulk statement commits in pieces, so a rollback keeps only what was
+--echo # already flushed -- what must not happen is losing the first transaction
+SELECT COUNT(*) AS still_present FROM b2 WHERE id BETWEEN 1001 AND 1200;
+
+--echo #
+--echo # a plain autocommit write still works under 2PC
+--echo #
+INSERT INTO b2 (id, v, d) VALUES (9000, 'single', 1.0);
+SELECT v FROM b2 WHERE id = 9000;
+
+DROP TABLE b2;
+--source ../include/cleanup_tidesdb.inc
+--echo # Done.

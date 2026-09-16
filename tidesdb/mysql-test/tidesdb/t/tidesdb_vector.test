@@ -1,0 +1,95 @@
+--source ../include/have_tidesdb_vector.inc
+--source ../include/have_tidesdb.inc
+#
+# Test: VECTOR columns in a TidesDB table.
+#
+# This server has the VECTOR data type but no vector index and no distance
+# function, so a nearest-neighbour search cannot be written here at all -- the
+# shared test's ANN queries have no SQL to be written in.  What the engine is
+# responsible for is the same either way, and is what this covers: a vector is
+# a value the row codec has to store and give back byte for byte, through
+# inserts, updates, deletes, a restart, and a secondary index on the rest of
+# the row.  A vector that came back wrong would show up here as a changed
+# dimension or a changed text form.
+#
+# The last section pins the missing half, so that a vector index arriving on
+# this server is a visible test failure asking for the shared test rather than
+# something nobody notices.
+#
+
+--echo #
+--echo # Setup
+--echo #
+
+CREATE TABLE docs (
+  id    INT NOT NULL PRIMARY KEY,
+  title VARCHAR(100),
+  v     VECTOR(4) NOT NULL,
+  KEY title_idx (title)
+) ENGINE=TidesDB;
+
+INSERT INTO docs VALUES (1, 'origin-x', STRING_TO_VECTOR('[1.0, 0.0, 0.0, 0.0]'));
+INSERT INTO docs VALUES (2, 'origin-y', STRING_TO_VECTOR('[0.0, 1.0, 0.0, 0.0]'));
+INSERT INTO docs VALUES (3, 'origin-z', STRING_TO_VECTOR('[0.0, 0.0, 1.0, 0.4]'));
+INSERT INTO docs VALUES (4, 'near-x',   STRING_TO_VECTOR('[0.9, 0.1, 0.0, 0.0]'));
+INSERT INTO docs VALUES (5, 'center',   STRING_TO_VECTOR('[0.5, 0.5, 0.5, 0.5]'));
+
+--echo #
+--echo # TEST 1: every vector reads back as it was written
+--echo #
+SELECT id, title, VECTOR_TO_STRING(v) AS v FROM docs ORDER BY id;
+SELECT id, VECTOR_DIM(v) AS dims FROM docs ORDER BY id;
+
+--echo #
+--echo # TEST 2: a vector reached through a secondary index on another column
+--echo #
+SELECT id, VECTOR_TO_STRING(v) AS v FROM docs WHERE title = 'near-x';
+
+--echo #
+--echo # TEST 3: UPDATE the vector column
+--echo #
+UPDATE docs SET v = STRING_TO_VECTOR('[0.0, 0.0, 0.0, 1.0]') WHERE id = 5;
+SELECT id, title, VECTOR_TO_STRING(v) AS v FROM docs WHERE id = 5;
+
+--echo #
+--echo # TEST 4: UPDATE a non-vector column leaves the vector alone
+--echo #
+UPDATE docs SET title = 'renamed' WHERE id = 4;
+SELECT id, title, VECTOR_TO_STRING(v) AS v FROM docs WHERE id = 4;
+
+--echo #
+--echo # TEST 5: DELETE a row with a vector
+--echo #
+DELETE FROM docs WHERE id = 2;
+SELECT id, title, VECTOR_TO_STRING(v) AS v FROM docs ORDER BY id;
+
+--echo #
+--echo # TEST 6: the vectors survive a restart
+--echo #
+--source include/restart_mysqld.inc
+SELECT id, title, VECTOR_TO_STRING(v) AS v FROM docs ORDER BY id;
+
+--echo #
+--echo # TEST 7: a vector that does not match the column's dimension is refused
+--echo #
+--error ER_DATA_TOO_LONG
+INSERT INTO docs VALUES (6, 'too-wide', STRING_TO_VECTOR('[1.0, 2.0, 3.0, 4.0, 5.0]'));
+
+DROP TABLE docs;
+
+--echo #
+--echo # This server has no vector index and no distance function
+--echo #
+--echo # Both halves of a nearest-neighbour search are missing, so there is
+--echo # nothing here for the engine to answer.  If either arrives, this
+--echo # section fails and the shared test is the one to run instead.
+--echo #
+--error ER_PARSE_ERROR
+CREATE TABLE vidx (id INT PRIMARY KEY, v VECTOR(4) NOT NULL, VECTOR INDEX (v)) ENGINE=TidesDB;
+
+--error ER_SP_DOES_NOT_EXIST
+SELECT VEC_DISTANCE_EUCLIDEAN(STRING_TO_VECTOR('[1,0,0,0]'),
+                              STRING_TO_VECTOR('[0,1,0,0]')) AS d;
+
+--source ../include/cleanup_tidesdb.inc
+--echo # Done.

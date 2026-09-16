@@ -1,0 +1,13 @@
+CREATE TABLE t (id INT PRIMARY KEY, v INT) WITH SYSTEM VERSIONING ENGINE=TidesDB;
+ERROR 42000: You have an error in your SQL syntax; check the manual that corresponds to your MySQL server version for the right syntax to use near 'SYSTEM VERSIONING ENGINE=TidesDB' at line 1
+CREATE TABLE t (
+id INT PRIMARY KEY,
+v INT,
+row_start TIMESTAMP(6) GENERATED ALWAYS AS ROW START,
+row_end   TIMESTAMP(6) GENERATED ALWAYS AS ROW END,
+PERIOD FOR SYSTEM_TIME (row_start, row_end)
+) ENGINE=TidesDB WITH SYSTEM VERSIONING;
+ERROR 42000: You have an error in your SQL syntax; check the manual that corresponds to your MySQL server version for the right syntax to use near 'ROW START,
+row_end   TIMESTAMP(6) GENERATED ALWAYS AS ROW END,
+PERIOD FOR SYSTEM' at line 4
+# Done.

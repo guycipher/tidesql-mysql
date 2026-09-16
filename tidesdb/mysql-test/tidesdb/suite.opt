@@ -1,0 +1,2 @@
+--plugin-load-add=ha_tidesdb.so
+--loose-plugin-maturity=unknown

@@ -1,0 +1,41 @@
+#
+# Every partitioning kind is refused, at CREATE
+#
+CREATE TABLE t_hash (id INT NOT NULL, val VARCHAR(50), PRIMARY KEY (id))
+ENGINE=TIDESDB PARTITION BY HASH(id) PARTITIONS 4;
+ERROR 42000: The storage engine for the table doesn't support native partitioning
+CREATE TABLE t_key (id INT NOT NULL, val VARCHAR(50), PRIMARY KEY (id))
+ENGINE=TIDESDB PARTITION BY KEY(id) PARTITIONS 3;
+ERROR 42000: The storage engine for the table doesn't support native partitioning
+CREATE TABLE t_range (id INT NOT NULL, val VARCHAR(50), PRIMARY KEY (id))
+ENGINE=TIDESDB PARTITION BY RANGE(id) (
+PARTITION p0 VALUES LESS THAN (100),
+PARTITION p1 VALUES LESS THAN MAXVALUE
+);
+ERROR 42000: The storage engine for the table doesn't support native partitioning
+CREATE TABLE t_list (id INT NOT NULL, region INT NOT NULL, PRIMARY KEY (id, region))
+ENGINE=TIDESDB PARTITION BY LIST(region) (
+PARTITION pa VALUES IN (1, 2),
+PARTITION pb VALUES IN (3, 4)
+);
+ERROR 42000: The storage engine for the table doesn't support native partitioning
+CREATE TABLE t_range_cols (id INT NOT NULL, created DATE NOT NULL, PRIMARY KEY (id, created))
+ENGINE=TIDESDB PARTITION BY RANGE COLUMNS(created) (
+PARTITION p2024 VALUES LESS THAN ('2025-01-01'),
+PARTITION pmax  VALUES LESS THAN (MAXVALUE)
+);
+ERROR 42000: The storage engine for the table doesn't support native partitioning
+#
+# And at ALTER, so an existing table cannot be partitioned either
+#
+CREATE TABLE t_plain (id INT NOT NULL PRIMARY KEY, val VARCHAR(50)) ENGINE=TIDESDB;
+INSERT INTO t_plain VALUES (1, 'a'), (2, 'b');
+ALTER TABLE t_plain PARTITION BY HASH(id) PARTITIONS 4;
+ERROR 42000: The storage engine for the table doesn't support native partitioning
+# The table is untouched by the refusal
+SELECT * FROM t_plain ORDER BY id;
+id	val
+1	a
+2	b
+DROP TABLE t_plain;
+# Done.

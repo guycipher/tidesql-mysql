@@ -1,0 +1,141 @@
+--source ../include/have_tidesdb.inc
+#
+# Index keys under a NO PAD collation.
+#
+# A field writes its sort weights into the buffer the engine hands it, and fills
+# the rest of that buffer only for a collation that pads.  Every utf8mb4_0900_*
+# collation is NO PAD -- including this server's default -- so the tail is the
+# engine's to initialise.  Left alone it carries whatever was already in that
+# memory, which makes two keys built for the same value differ: index lookups
+# miss rows, a UNIQUE index lets a duplicate through, and the stray bytes reach
+# the on-disk index.
+#
+# The rest of the suite runs with the collation pinned to utf8mb4_general_ci,
+# which pads and therefore cannot show any of this, and tidesdb_collation covers
+# only padding collations.  These tables name a NO PAD collation for that reason.
+#
+
+--echo #
+--echo # A secondary index on a NO PAD collation
+--echo #
+CREATE TABLE c_nopad (
+  id INT PRIMARY KEY,
+  s  VARCHAR(50) COLLATE utf8mb4_0900_ai_ci,
+  KEY k (s)
+) ENGINE=TIDESDB;
+INSERT INTO c_nopad VALUES (1,'Alice'),(2,'Bob'),(3,'alice'),(4,'Zoe');
+
+--echo # exact match finds the rows, and the collation's case-insensitivity holds
+SELECT id, s FROM c_nopad WHERE s = 'Alice' ORDER BY id;
+SELECT id, s FROM c_nopad WHERE s = 'ALICE' ORDER BY id;
+SELECT id, s FROM c_nopad WHERE s = 'Bob';
+
+--echo # the index and a table scan must agree, which is what a wrong key breaks
+SELECT COUNT(*) AS via_index FROM c_nopad FORCE INDEX (k) WHERE s = 'Alice';
+SELECT COUNT(*) AS via_scan  FROM c_nopad IGNORE INDEX (k) WHERE s = 'Alice';
+
+--echo # ordering through the index
+SELECT s FROM c_nopad FORCE INDEX (k) ORDER BY s;
+
+--echo # a key built for the same value twice has to be the same key
+FLUSH TABLES;
+SELECT COUNT(*) AS found_after_reopen FROM c_nopad WHERE s = 'Alice';
+DROP TABLE c_nopad;
+
+--echo #
+--echo # A primary key on a NO PAD collation
+--echo #
+CREATE TABLE pk_nopad (
+  s VARCHAR(50) COLLATE utf8mb4_0900_ai_ci PRIMARY KEY,
+  v INT
+) ENGINE=TIDESDB;
+INSERT INTO pk_nopad VALUES ('Alice',1),('Bob',2);
+SELECT s, v FROM pk_nopad WHERE s = 'Alice';
+UPDATE pk_nopad SET v = 10 WHERE s = 'Alice';
+SELECT s, v FROM pk_nopad WHERE s = 'Alice';
+DELETE FROM pk_nopad WHERE s = 'Bob';
+SELECT s, v FROM pk_nopad ORDER BY s;
+DROP TABLE pk_nopad;
+
+--echo #
+--echo # A UNIQUE index on a NO PAD collation must still refuse a duplicate
+--echo #
+CREATE TABLE uq_nopad (
+  id INT PRIMARY KEY,
+  s  VARCHAR(50) COLLATE utf8mb4_0900_ai_ci,
+  UNIQUE KEY u (s)
+) ENGINE=TIDESDB;
+INSERT INTO uq_nopad VALUES (1,'Alice');
+--error ER_DUP_ENTRY
+INSERT INTO uq_nopad VALUES (2,'Alice');
+--echo # and the collation decides what counts as a duplicate
+--error ER_DUP_ENTRY
+INSERT INTO uq_nopad VALUES (3,'ALICE');
+INSERT INTO uq_nopad VALUES (4,'Bob');
+SELECT id, s FROM uq_nopad ORDER BY id;
+DROP TABLE uq_nopad;
+
+--echo #
+--echo # Values of differing length, where the padding rule is what decides order
+--echo #
+CREATE TABLE len_nopad (
+  id INT PRIMARY KEY,
+  s  VARCHAR(50) COLLATE utf8mb4_0900_ai_ci,
+  KEY k (s)
+) ENGINE=TIDESDB;
+INSERT INTO len_nopad VALUES (1,''),(2,'A'),(3,'AB'),(4,'ABC');
+SELECT id, CONCAT('[', s, ']') AS v FROM len_nopad FORCE INDEX (k) ORDER BY s, id;
+SELECT id FROM len_nopad WHERE s = '';
+SELECT id FROM len_nopad WHERE s = 'A';
+SELECT id FROM len_nopad WHERE s = 'AB';
+DROP TABLE len_nopad;
+
+--echo #
+--echo # A CHAR column, which pads even under a NO PAD collation
+--echo #
+CREATE TABLE ch_nopad (
+  id INT PRIMARY KEY,
+  s  CHAR(20) COLLATE utf8mb4_0900_ai_ci,
+  KEY k (s)
+) ENGINE=TIDESDB;
+INSERT INTO ch_nopad VALUES (1,'Alice'),(2,'Bob');
+SELECT id, s FROM ch_nopad WHERE s = 'Alice';
+DROP TABLE ch_nopad;
+
+--echo #
+--echo # A composite key and a prefix key, which encode their parts differently
+--echo #
+CREATE TABLE mc_nopad (
+  id INT PRIMARY KEY,
+  a  VARCHAR(50) COLLATE utf8mb4_0900_ai_ci,
+  b  VARCHAR(50) COLLATE utf8mb4_0900_ai_ci,
+  KEY ab (a, b),
+  KEY pre (b(10))
+) ENGINE=TIDESDB;
+INSERT INTO mc_nopad VALUES (1,'alpha','beta'),(2,'alpha','gamma'),(3,'delta','beta');
+
+--echo # both parts of the composite key
+SELECT id FROM mc_nopad FORCE INDEX (ab) WHERE a = 'alpha' AND b = 'beta';
+--echo # the leading part alone
+SELECT id FROM mc_nopad FORCE INDEX (ab) WHERE a = 'alpha' ORDER BY id;
+--echo # a prefix key, whose entries are truncated to the prefix length
+SELECT id FROM mc_nopad FORCE INDEX (pre) WHERE b = 'beta' ORDER BY id;
+--echo # a range, which compares the encoded parts rather than seeking one
+SELECT id FROM mc_nopad FORCE INDEX (ab) WHERE a >= 'alpha' AND a < 'z' ORDER BY id;
+DROP TABLE mc_nopad;
+
+--echo #
+--echo # A padding collation still behaves as it did
+--echo #
+CREATE TABLE c_pad (
+  id INT PRIMARY KEY,
+  s  VARCHAR(50) COLLATE utf8mb4_general_ci,
+  KEY k (s)
+) ENGINE=TIDESDB;
+INSERT INTO c_pad VALUES (1,'Alice'),(2,'Bob');
+SELECT id, s FROM c_pad WHERE s = 'Alice';
+SELECT s FROM c_pad FORCE INDEX (k) ORDER BY s;
+DROP TABLE c_pad;
+
+--source ../include/cleanup_tidesdb.inc
+--echo # Done.

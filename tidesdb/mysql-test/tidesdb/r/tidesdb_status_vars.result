@@ -1,0 +1,90 @@
+#
+# TEST 1: Status variables exist
+#
+SELECT COUNT(*) >= 40 AS has_all_vars FROM performance_schema.global_status
+WHERE VARIABLE_NAME LIKE 'TIDESDB%';
+has_all_vars
+1
+#
+# TEST 2: Variables have reasonable values after table operations
+#
+CREATE TABLE t_stat (id INT PRIMARY KEY, v VARCHAR(200)) ENGINE=TidesDB;
+INSERT INTO t_stat VALUES (1, REPEAT('A', 100)), (2, REPEAT('B', 100));
+SELECT * FROM t_stat ORDER BY id;
+id	v
+1	AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
+2	BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB
+SHOW ENGINE TIDESDB STATUS;
+SELECT VARIABLE_VALUE > 0 AS cf_positive FROM performance_schema.global_status
+WHERE VARIABLE_NAME = 'TIDESDB_COLUMN_FAMILIES';
+cf_positive
+1
+SELECT VARIABLE_VALUE > 0 AS parts_positive FROM performance_schema.global_status
+WHERE VARIABLE_NAME = 'TIDESDB_CACHE_PARTITIONS';
+parts_positive
+1
+#
+# TEST 3: All variable names are correct
+#
+SELECT VARIABLE_NAME FROM performance_schema.global_status
+WHERE VARIABLE_NAME LIKE 'TIDESDB%' ORDER BY VARIABLE_NAME;
+VARIABLE_NAME
+tidesdb_active_transactions
+tidesdb_cache_bytes
+tidesdb_cache_entries
+tidesdb_cache_hit_rate
+tidesdb_cache_hits
+tidesdb_cache_misses
+tidesdb_cache_partitions
+tidesdb_column_families
+tidesdb_compaction_bytes_read
+tidesdb_compaction_bytes_written
+tidesdb_compaction_count
+tidesdb_compaction_queue
+tidesdb_data_size_bytes
+tidesdb_flush_bytes_written
+tidesdb_flush_count
+tidesdb_flush_pending
+tidesdb_global_sequence
+tidesdb_immutable_memtables
+tidesdb_io_sstable_write_bytes
+tidesdb_io_sstable_write_ops
+tidesdb_io_wal_write_bytes
+tidesdb_io_wal_write_ops
+tidesdb_klog_logical_bytes
+tidesdb_klog_stored_bytes
+tidesdb_library_version
+tidesdb_max_sst_tombstone_density
+tidesdb_max_sst_tombstone_density_level
+tidesdb_memtable_bytes
+tidesdb_memtable_is_flushing
+tidesdb_min_snapshot_sequence
+tidesdb_open_sstables
+tidesdb_stall_admission
+tidesdb_stall_manifest_commit
+tidesdb_stall_rotate_lock
+tidesdb_stall_rotate_work
+tidesdb_stall_wal_append
+tidesdb_tombstone_ratio
+tidesdb_total_sstables
+tidesdb_total_tombstones
+tidesdb_txn_memory_bytes
+tidesdb_user_bytes_written
+tidesdb_version
+tidesdb_version_hex
+tidesdb_vlog_bytes_written
+tidesdb_vlog_encoded_logical_bytes
+tidesdb_vlog_encoded_stored_bytes
+tidesdb_vlog_file_size
+tidesdb_vlog_used_bytes
+tidesdb_vlog_value_count
+tidesdb_wal_generation
+tidesdb_write_stall_ceiling_hits
+tidesdb_write_stall_us
+tidesdb_writes_blocked
+tidesdb_writes_throttled
+#
+# Cleanup
+#
+DROP TABLE t_stat;
+# Done.

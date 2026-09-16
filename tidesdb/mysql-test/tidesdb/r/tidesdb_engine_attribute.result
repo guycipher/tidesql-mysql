@@ -1,0 +1,83 @@
+# Every option a table can name
+CREATE TABLE t_opts (id INT PRIMARY KEY, v VARCHAR(50)) ENGINE=TidesDB
+ENGINE_ATTRIBUTE='{"compression": "ZSTD", "bloom_filter": false, "bloom_fpr": 50,
+                     "ttl": 3600, "keep_values_inline": true, "min_levels": 5,
+                     "isolation_level": "READ_COMMITTED"}';
+SHOW CREATE TABLE t_opts;
+Table	Create Table
+t_opts	CREATE TABLE `t_opts` (
+  `id` int NOT NULL,
+  `v` varchar(50) COLLATE utf8mb4_general_ci DEFAULT NULL,
+  PRIMARY KEY (`id`)
+) ENGINE=TidesDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci /*!80021 ENGINE_ATTRIBUTE='{"ttl": 3600, "bloom_fpr": 50, "min_levels": 5, "compression": "ZSTD", "bloom_filter": false, "isolation_level": "READ_COMMITTED", "keep_values_inline": true}' */
+INSERT INTO t_opts VALUES (1, 'a'), (2, 'b');
+SELECT * FROM t_opts ORDER BY id;
+id	v
+1	a
+2	b
+DROP TABLE t_opts;
+# An option named once does not disturb the others
+CREATE TABLE t_one (id INT PRIMARY KEY) ENGINE=TidesDB ENGINE_ATTRIBUTE='{"ttl": 60}';
+INSERT INTO t_one VALUES (1);
+SELECT * FROM t_one;
+id
+1
+DROP TABLE t_one;
+# A table naming nothing takes the session defaults
+CREATE TABLE t_plain (id INT PRIMARY KEY) ENGINE=TidesDB;
+INSERT INTO t_plain VALUES (1);
+SELECT * FROM t_plain;
+id
+1
+DROP TABLE t_plain;
+# A misspelled option is refused, naming itself
+CREATE TABLE t_bad (id INT PRIMARY KEY) ENGINE=TidesDB ENGINE_ATTRIBUTE='{"blom_filter": false}';
+ERROR HY000: ENGINE_ATTRIBUTE: unknown option 'blom_filter'
+# So is a value out of range
+CREATE TABLE t_bad (id INT PRIMARY KEY) ENGINE=TidesDB ENGINE_ATTRIBUTE='{"bloom_fpr": 0}';
+ERROR HY000: ENGINE_ATTRIBUTE: '0' is out of range for 'bloom_fpr'
+# And a value that is not one of the accepted names
+CREATE TABLE t_bad (id INT PRIMARY KEY) ENGINE=TidesDB ENGINE_ATTRIBUTE='{"compression": "BROTLI"}';
+ERROR HY000: ENGINE_ATTRIBUTE: 'BROTLI' is not a recognised value for 'compression'
+# Encryption is named the same way
+CREATE TABLE t_bad (id INT PRIMARY KEY) ENGINE=TidesDB ENGINE_ATTRIBUTE='{"encryption_key_id": 999}';
+ERROR HY000: ENGINE_ATTRIBUTE: '999' is out of range for 'encryption_key_id'
+# ALTER refuses one the same way
+CREATE TABLE t_alter (id INT PRIMARY KEY) ENGINE=TidesDB ENGINE_ATTRIBUTE='{"ttl": 60}';
+ALTER TABLE t_alter ENGINE_ATTRIBUTE='{"ttl": "soon"}', ALGORITHM=INPLACE;
+ERROR HY000: ENGINE_ATTRIBUTE: 'soon' is not a number for 'ttl'
+# And accepts a change it understands
+ALTER TABLE t_alter ENGINE_ATTRIBUTE='{"ttl": 120, "compression": "SNAPPY"}';
+SHOW CREATE TABLE t_alter;
+Table	Create Table
+t_alter	CREATE TABLE `t_alter` (
+  `id` int NOT NULL,
+  PRIMARY KEY (`id`)
+) ENGINE=TidesDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci /*!80021 ENGINE_ATTRIBUTE='{"ttl": 120, "compression": "SNAPPY"}' */
+DROP TABLE t_alter;
+#
+# The options a table is created with are settled then, not resolved again later
+#
+# A table that names no options inherits the session defaults, and what it inherited has to
+# stay with it: an option resolved afresh at each open would make the same table behave
+# differently depending on what the session that opened it happened to be set to.
+#
+SET SESSION tidesdb_default_isolation_level = 'READ_COMMITTED';
+CREATE TABLE t_frozen (id INT PRIMARY KEY, v INT) ENGINE=TidesDB;
+INSERT INTO t_frozen VALUES (1, 10);
+# Put the session default back, then reopen the table from a server that never saw it set
+SET SESSION tidesdb_default_isolation_level = DEFAULT;
+# restart
+SET SESSION TRANSACTION ISOLATION LEVEL REPEATABLE READ;
+BEGIN;
+SELECT id, v FROM t_frozen ORDER BY id;
+id	v
+1	10
+INSERT INTO t_frozen VALUES (2, 20);
+# Still read committed, as it was created: the row committed afterwards is visible
+SELECT id, v FROM t_frozen ORDER BY id;
+id	v
+1	10
+2	20
+COMMIT;
+DROP TABLE t_frozen;

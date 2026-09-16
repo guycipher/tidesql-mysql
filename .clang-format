@@ -1,0 +1,18 @@
+# Style the engine is written in.  Without this file clang-format falls back to
+# LLVM defaults, and code_formatter.sh then rewrites every source file in the
+# repository -- so this exists as much to prevent a spurious whole-tree diff as
+# to describe the style.
+BasedOnStyle: LLVM
+IndentWidth: 4
+ColumnLimit: 100
+BreakBeforeBraces: Allman
+AccessModifierOffset: -1
+PointerAlignment: Right
+AllowShortFunctionsOnASingleLine: None
+AllowShortIfStatementsOnASingleLine: WithoutElse
+AllowShortLoopsOnASingleLine: true
+SpacesBeforeTrailingComments: 2
+IndentCaseLabels: true
+SortIncludes: true
+AlignConsecutiveMacros: false
+AlignEscapedNewlines: Left

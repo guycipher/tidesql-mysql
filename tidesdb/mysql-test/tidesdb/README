@@ -1,0 +1,13 @@
+The same tests as ../tidesdb, recorded against MySQL.
+
+t/, include/ and suite.opt are symlinks: there is one copy of every test body and every helper, and
+this directory exists only to hold a second set of .result files.
+
+That second set is necessary because a result file records the server's output as well as the
+engine's behaviour, and the two servers word the same correct outcome differently -- "int" against
+"int(11)", an explicit per-column COLLATE, a duplicate-entry error naming "db.key" rather than
+"key".  None of that is the engine talking, so neither result set is more correct than the other
+and neither can serve both.
+
+A behavioural difference must never be absorbed by re-recording: if a test's output changes because
+the engine did something different, that is the thing to fix, not the file.

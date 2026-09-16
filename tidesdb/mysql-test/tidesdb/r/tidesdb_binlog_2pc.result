@@ -1,0 +1,50 @@
+# binary logging is on, so each commit below is prepare + commit
+SELECT @@GLOBAL.log_bin AS log_bin;
+log_bin
+1
+CREATE TABLE b2 (
+id INT PRIMARY KEY,
+v  VARCHAR(32),
+d  DECIMAL(16,6),
+KEY k_v (v),
+KEY k_d (d)
+) ENGINE=TIDESDB;
+#
+# A transaction whose last statement commits in pieces
+#
+# Each row carries its secondary-index writes into the same batch, so a
+# few hundred updated rows cross the mid-statement flush threshold and the
+# flush lands on the final row -- leaving the engine's transaction empty
+# at COMMIT, which is the case that used to fail.
+BEGIN;
+UPDATE b2 SET v = 'batched' WHERE id BETWEEN 1001 AND 1100;
+COMMIT;
+SELECT COUNT(*) AS rows_total, SUM(id) AS sum_id FROM b2;
+rows_total	sum_id
+200	220100
+SELECT COUNT(*) AS batched FROM b2 WHERE v = 'batched';
+batched
+100
+# and the secondary indexes agree with the rows
+SELECT COUNT(*) AS by_index FROM b2 FORCE INDEX (k_v) WHERE v = 'batched';
+by_index
+100
+#
+# and a rollback of the same shape discards all of it
+#
+BEGIN;
+ROLLBACK;
+# a bulk statement commits in pieces, so a rollback keeps only what was
+# already flushed -- what must not happen is losing the first transaction
+SELECT COUNT(*) AS still_present FROM b2 WHERE id BETWEEN 1001 AND 1200;
+still_present
+200
+#
+# a plain autocommit write still works under 2PC
+#
+INSERT INTO b2 (id, v, d) VALUES (9000, 'single', 1.0);
+SELECT v FROM b2 WHERE id = 9000;
+v
+single
+DROP TABLE b2;
+# Done.

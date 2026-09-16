@@ -1,0 +1,50 @@
+--source ../include/have_tidesdb.inc
+#
+# Partition operations are not available to this engine on this server.
+#
+# The shared tidesdb_partition_ops test goes a level deeper than
+# tidesdb_partition: pruning, a row relocating when its partitioning key is
+# updated, uniqueness across partitions, auto-increment across partitions.
+# None of it can be written here, because a partitioned table cannot be
+# created at all -- tidesdb_partition says why, and pins that refusal.
+#
+# What is left to pin is the other end: the ALTER statements that manage
+# partitions on a table that has them.  They are refused too, and refused for
+# the same reason, so the two tests together say that no partitioned table can
+# come into existence by any route.
+#
+
+CREATE TABLE p (id INT NOT NULL, v INT, PRIMARY KEY (id)) ENGINE=TIDESDB;
+INSERT INTO p VALUES (1, 10), (2, 20), (3, 30);
+
+--echo #
+--echo # Every partition-management ALTER is refused
+--echo #
+
+--error ER_CHECK_NOT_IMPLEMENTED
+ALTER TABLE p PARTITION BY RANGE (id) (
+  PARTITION p0 VALUES LESS THAN (10),
+  PARTITION p1 VALUES LESS THAN MAXVALUE
+);
+
+--error ER_PARTITION_MGMT_ON_NONPARTITIONED
+ALTER TABLE p ADD PARTITION (PARTITION p2 VALUES LESS THAN (30));
+
+--error ER_PARTITION_MGMT_ON_NONPARTITIONED
+ALTER TABLE p DROP PARTITION p1;
+
+--error ER_PARTITION_MGMT_ON_NONPARTITIONED
+ALTER TABLE p TRUNCATE PARTITION p1;
+
+--error ER_PARTITION_MGMT_ON_NONPARTITIONED
+ALTER TABLE p REORGANIZE PARTITION p1 INTO (
+  PARTITION p1a VALUES LESS THAN (20),
+  PARTITION p1b VALUES LESS THAN MAXVALUE
+);
+
+--echo # The table is untouched by any of the refusals
+SELECT * FROM p ORDER BY id;
+DROP TABLE p;
+
+--source ../include/cleanup_tidesdb.inc
+--echo # Done.
