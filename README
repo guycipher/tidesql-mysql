@@ -19,8 +19,11 @@ WHAT YOU GET
 Transactions with optimistic MVCC, so readers never block writers.  Primary and secondary
 indexes, foreign keys enforced in the engine, auto-increment, virtual and stored generated
 columns and indexes on either, savepoints, XA and crash recovery, row expiry (TTL), data-at-rest
-encryption with key rotation, full-text and spatial indexes, VECTOR columns, online DDL, and
-online backup.
+encryption with key rotation, full-text and spatial indexes, online DDL, and online backup.
+
+`VECTOR` columns work, though not because the engine does anything for them: the server models the
+type as a blob and the engine stores blobs.  They round-trip faithfully and that is all -- there is
+no similarity search, on either side.  See doc/06-appendix/limitations.md.
 
 Per-table storage options -- compression, bloom filters, isolation, TTL, LSM tuning -- are named
 through ENGINE_ATTRIBUTE:

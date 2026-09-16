@@ -632,7 +632,7 @@ typedef std::ptrdiff_t my_ptrdiff_t;
    new value overwrites it in place and the server's old-versus-new comparison then finds the two
    records identical.  the update is dropped with "Changed: 0" and no error -- silently, and only
    when every column being set is blob-family, since any other changed column makes the comparison
-   differ for its own reasons.  BLOB, TEXT and the vector types all sit behind this.
+   differ for its own reasons.  BLOB, TEXT, etc all sit behind this.
  *
    so rather than let unpack copy, the engine points the field at its own row buffer.  that buffer
    outlives the field's use of it: it is the handler's row buffer, replaced only on the next read

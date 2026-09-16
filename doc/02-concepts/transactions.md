@@ -124,17 +124,26 @@ explicit multi-statement transactions. They are only meaningful within a `BEGIN 
 
 ## Bulk DML batching
 
-Statements that touch many rows, such as `LOAD DATA INFILE`, multi-row `INSERT`, `INSERT ... SELECT`,
-and range `UPDATE` or `DELETE`, keep the transaction from growing without bound by committing
-mid-statement in fixed-size batches. The engine hooks `start_bulk_insert`, `start_bulk_update`, and
-`start_bulk_delete`, counts row operations (the data write plus secondary-index maintenance)
-against a batch size of 500 operations, and at each threshold commits the current transaction and
-resets it at the same isolation level for the next batch, so the rest of a long statement is
-validated exactly as its first rows were. Statement memory stays bounded regardless of
-statement size, autocommit semantics are preserved so a failure rolls back only the current batch,
-and the statement reports the first error it hit. The mid-statement commit is shared across insert,
-update, and delete through one helper, so the threshold and the iterator and dup-cache invalidation
-are identical on all three paths.
+Statements that write many rows — `LOAD DATA INFILE`, multi-row `INSERT`, `INSERT ... SELECT`, and a
+range `DELETE` — keep the transaction from growing without bound by committing mid-statement in
+fixed-size batches. The engine hooks `start_bulk_insert` and `start_bulk_delete`, counts row
+operations (the data write plus secondary-index maintenance) against a batch size of 500, and at each
+threshold commits the current transaction and resets it at the same isolation level for the next
+batch, so the rest of a long statement is validated exactly as its first rows were. Statement memory
+stays bounded regardless of statement size, and the statement reports the first error it hit. Both
+paths share one mid-statement commit helper, so the threshold and the iterator and dup-cache
+invalidation are identical on each.
+
+`UPDATE` is deliberately excluded. The server offers a batched-update path, but a multi-row `UPDATE`
+routed through it is never written to the binary log: `handler::ha_update_row` logs the row it
+changed, and `handler::ha_bulk_update_row` does not. An engine that accepts batching there loses
+every multi-row `UPDATE` from replication and from point-in-time recovery, silently. So the engine
+declines it, exactly as InnoDB does, and a large `UPDATE` holds its whole statement in one
+transaction instead.
+
+What that costs is described in [Limitations](/appendix/limitations): a batched statement is not
+atomic against a crash, and with binary logging on the engine can make batches durable before the
+binlog cache is flushed.
 
 ## Group commit
 
@@ -142,10 +151,9 @@ Commits are ordered by the server's binlog group-commit machinery, and the trans
 commit round share the cost of a single durability barrier, which is what keeps `FULL` sync
 affordable under load — see [Durability and Sync Modes](/concepts/durability).
 
-The engine takes no part in the ordering itself. This server orders commits inside the binlog
-coordinator and publishes no engine hook for it, so the engine's durable commit runs on the ordinary
-commit path; there is nothing for it to register. The engine carries a `commit_ordered`
-implementation for servers that do publish such a hook, and it is simply not wired here.
+The engine takes no part in the ordering. MySQL orders commits inside the binlog coordinator and
+publishes no handlerton hook an engine could register for, so the engine's durable commit simply runs
+on the ordinary commit path and inherits the ordering the coordinator imposes around it.
 
 ## Crash recovery and two-phase commit
 

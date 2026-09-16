@@ -79,9 +79,7 @@ int ha_tidesdb::update_check_unique(const uchar *old_data, const uchar *new_data
         KEY *ki = &table->key_info[i];
 
         /* SQL gives NULL no identity, so a UNIQUE index never constrains a row whose indexed value
-           is NULL in any part.  Skip the check entirely in that case, matching InnoDB.  This also
-           keeps the engine off the server's internal MHNSW graph table, whose UNIQUE(tref) column
-           is NULL for the graph metadata rows. */
+           is NULL in any part.  Skip the check entirely in that case, matching InnoDB. */
         bool any_null = false;
         for (uint p = 0; p < ki->user_defined_key_parts; p++)
         {

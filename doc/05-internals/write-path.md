@@ -108,7 +108,8 @@ tombstones with no change in result. The whole thing lives in the transaction, s
 restores the rows like any other write.
 
 Deferral is skipped for a table with a delete trigger, since a deferred tombstone must never hide a
-row from a trigger reading the table mid-statement.
+row from a trigger reading the table mid-statement, and for a table with no declared primary key,
+whose rows are keyed by a hidden row id the statement's `WHERE` never spans as a range.
 Secondary-index entries are still deleted per row, because a primary-key range does not bound a
 secondary-index range, so the range tombstone covers the primary row CF alone. A delete larger than
 an internal cap flushes its buffer to per-row tombstones and finishes on the ordinary path, which

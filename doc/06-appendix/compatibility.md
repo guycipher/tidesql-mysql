@@ -36,7 +36,6 @@ each one. The manual says so again at the point each matters:
 | Encryption key custody | A keyring component, two-tier; see [Data-at-Rest Encryption](/reference/encryption) |
 | Partitioned tables | Not available; see [Partitioning](/administration/partitioning) |
 | System-versioned tables | Not available — the server has no system versioning |
-| Vector search | `VECTOR` columns store and read back; there is no vector index or distance function to search with. See [Vector Columns](/reference/vector-search) |
 | Multi-primary clustering | Not available; see [Replication and High Availability](/administration/replication-ha) |
 | Column histograms | `ANALYZE TABLE ... UPDATE HISTOGRAM`, sampled by the engine; see [Table Maintenance](/administration/maintenance) |
 | Bulk load | Not available — the server's loader needs a driver component community builds do not ship; see [Limitations](/appendix/limitations) |

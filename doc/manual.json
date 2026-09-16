@@ -127,8 +127,8 @@
           "title": "Full-Text Search"
         },
         {
-          "file": "vector-search.md",
-          "slug": "reference/vector-search",
+          "file": "vector-columns.md",
+          "slug": "reference/vector-columns",
           "title": "Vector Columns"
         },
         {

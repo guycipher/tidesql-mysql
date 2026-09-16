@@ -55,7 +55,7 @@ Once loaded it appears in `SHOW ENGINES`:
       ENGINE: TidesDB
      SUPPORT: YES
      COMMENT: LSM B+tree engine with ACID transactions, MVCC concurrency, secondary, spatial
-              and full-text indexes, vector storage, and encryption
+              and full-text indexes, and encryption
 TRANSACTIONS: YES
           XA: YES
   SAVEPOINTS: YES

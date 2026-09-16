@@ -60,12 +60,12 @@ int ha_tidesdb::fetch_row_by_pk(tidesdb_txn_t *txn, const uchar *pk, uint pk_len
     {
         /* For BLOB tables, Field_blob::unpack() stores pointers into the
            source buffer.  These pointers must remain valid until the next
-           fetch into the SAME record buffer.  The server handler API
-           (e.g., mhnsw vector index maintenance) may interleave reads into
-           record[0] and record[1], so we maintain two backing buffers:
-           last_row for record[0] fetches, last_row2 for record[1] fetches.
-           This prevents a fetch into record[1] from invalidating BLOB
-           pointers that record[0] still references.
+           fetch into the SAME record buffer.  The server interleaves reads
+           into record[0] and record[1] -- an UPDATE holds the old row in
+           record[1] while reading the new one -- so we maintain two backing
+           buffers: last_row for record[0] fetches, last_row2 for record[1]
+           fetches.  This prevents a fetch into record[1] from invalidating
+           BLOB pointers that record[0] still references.
 
            We identify record[1] using the precomputed bounds set in open(). */
         bool is_rec1 = record1_lo_ && buf >= record1_lo_ && buf < record1_hi_;

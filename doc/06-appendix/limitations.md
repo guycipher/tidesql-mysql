@@ -17,9 +17,11 @@ implement native partitioning of its own, so every partitioned `CREATE TABLE` is
 **System-versioned tables.** The server has no system versioning, so `WITH SYSTEM VERSIONING` does
 not parse.
 
-**Vector search.** `VECTOR` columns are stored and returned normally, but the server has no vector
-index and no distance function, so there is no nearest-neighbour query for the engine to answer.
-See [Vector Columns](/reference/vector-search).
+**Vector search.** A `VECTOR` column stores and reads back, because the server models the type as a
+blob and the engine stores blobs — there is no vector-specific code in TideSQL or in the TidesDB
+library. What does not exist is any similarity search: the server has neither a vector index nor a
+distance function, and indexing the column is refused outright with `ER_NON_SCALAR_USED_AS_KEY`. See
+[Vector Columns](/reference/vector-columns).
 
 **Multi-primary clustering.** The server carries no write-set replication integration, so there is
 nothing for the engine to participate in. Source-and-replica topologies work normally. See

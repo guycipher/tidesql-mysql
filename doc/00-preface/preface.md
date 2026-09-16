@@ -22,7 +22,7 @@ repeating it.
   without blocking writers.
 - **A full SQL engine surface**, with primary keys, secondary indexes, foreign keys, auto-increment,
   virtual and stored generated columns, savepoints, TTL expiration, data-at-rest encryption,
-  full-text and spatial indexes, `VECTOR` columns, online DDL, and online backup, all reached
+  full-text and spatial indexes, online DDL, and online backup, all reached
   through standard SQL. [Limitations](/appendix/limitations) is the short list of what this server
   does not offer an engine.
 - **Log-structured**, so it favors write throughput, with compaction keeping read cost bounded.

@@ -67,7 +67,6 @@ rather than a choice the engine made.
 | Encryption key rotation | `SET GLOBAL tidesdb_rotate_table_key` / `tidesdb_rotate_master_key` |
 | Partitioned tables | not available - the server has no general partitioning layer, and this engine does not implement its own |
 | System-versioned tables | not available - the server has no system versioning |
-| Vector search | `VECTOR` columns store and read back; the server has no vector index and no distance function, so there is no nearest-neighbour query to answer |
 | Multi-primary clustering | not available - Group Replication's certification layer is InnoDB-only |
 | Bulk load | not available - `LOAD DATA ... ALGORITHM = BULK` needs a driver component community builds do not ship |
 | Parallel scan | not available - the server declares the interface but never calls it |

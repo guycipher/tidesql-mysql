@@ -1171,8 +1171,7 @@ TDB_DECLARE_PLUGIN(tidesdb){MYSQL_STORAGE_ENGINE_PLUGIN,
                             TIDESQL_ENGINE_NAME,
                             TIDESQL_ENGINE_NAME,
                             "LSM B+tree engine with ACID transactions, MVCC concurrency, "
-                            "secondary, spatial and full-text indexes, vector storage, and "
-                            "encryption",
+                            "secondary, spatial and full-text indexes, and encryption",
                             PLUGIN_LICENSE_GPL,
                             TDB_PLUGIN_LIFECYCLE(tidesdb_init_func, tidesdb_deinit_func),
                             TIDESQL_PLUGIN_VERSION,

@@ -76,15 +76,21 @@ INSERT INTO docs VALUES (6, 'too-wide', STRING_TO_VECTOR('[1.0, 2.0, 3.0, 4.0, 5
 ERROR 22001: Data too long for column 'v' at row 1
 DROP TABLE docs;
 #
-# This server has no vector index and no distance function
+# There is no similarity search, and no way to index a vector
 #
-# Both halves of a nearest-neighbour search are missing, so there is
-# nothing here for the engine to answer.  If either arrives, this
-# section fails and the shared test is the one to run instead.
-#
+# Indexing is the half that can be pinned by behaviour rather than by name:
+# a vector is not a scalar the server can order, so every spelling of an
+# index over one is refused.  If that ever stops being true, this fails and
+# the vector-columns chapter needs revisiting.
 CREATE TABLE vidx (id INT PRIMARY KEY, v VECTOR(4) NOT NULL, VECTOR INDEX (v)) ENGINE=TidesDB;
 ERROR 42000: You have an error in your SQL syntax; check the manual that corresponds to your MySQL server version for the right syntax to use near 'INDEX (v)) ENGINE=TidesDB' at line 1
-SELECT VEC_DISTANCE_EUCLIDEAN(STRING_TO_VECTOR('[1,0,0,0]'),
-STRING_TO_VECTOR('[0,1,0,0]')) AS d;
-ERROR 42000: FUNCTION test.VEC_DISTANCE_EUCLIDEAN does not exist
+CREATE TABLE vidx (id INT PRIMARY KEY, v VECTOR(4) NOT NULL, KEY (v)) ENGINE=TidesDB;
+ERROR HY000: Non-scalar (e.g., vector) column 'v' cannot be used as key.
+CREATE TABLE vidx (id INT PRIMARY KEY, v VECTOR(4) NOT NULL, FULLTEXT KEY (v)) ENGINE=TidesDB;
+ERROR HY000: Non-scalar (e.g., vector) column 'v' cannot be used as key.
+CREATE TABLE vidx (id INT PRIMARY KEY, v VECTOR(4) NOT NULL, SPATIAL KEY (v)) ENGINE=TidesDB;
+ERROR HY000: Non-scalar (e.g., vector) column 'v' cannot be used as key.
+# The distance-function half cannot be canaried the same way: there is no
+# name to probe for that the server has committed to, so its absence is
+# recorded in the chapter rather than asserted here.
 # Done.

@@ -3,18 +3,22 @@
 #
 # Test: VECTOR columns in a TidesDB table.
 #
-# This server has the VECTOR data type but no vector index and no distance
-# function, so a nearest-neighbour search cannot be written here at all -- the
-# shared test's ANN queries have no SQL to be written in.  What the engine is
-# responsible for is the same either way, and is what this covers: a vector is
-# a value the row codec has to store and give back byte for byte, through
-# inserts, updates, deletes, a restart, and a secondary index on the rest of
-# the row.  A vector that came back wrong would show up here as a changed
-# dimension or a changed text form.
+# The engine has no vector code.  VECTOR is a blob type -- Field_vector derives
+# from Field_blob and carries its BLOB_FLAG -- so a vector reaches the row codec
+# as bytes and is handled by the same path as BLOB and TEXT.  Support is
+# inherited rather than written, which is exactly why it is worth testing: a
+# change to the blob path, or to how the server models the type, would break it
+# silently and nothing else here would notice.
 #
-# The last section pins the missing half, so that a vector index arriving on
-# this server is a visible test failure asking for the shared test rather than
-# something nobody notices.
+# So what follows is a blob round-trip in vector clothing: the value has to come
+# back byte for byte through inserts, updates, deletes and a restart, has to be
+# reachable through a secondary index on another column, and has to keep its
+# dimension.  A vector that came back wrong shows up as a changed dimension or a
+# changed text form.
+#
+# The last section pins the absence of similarity search, so that a vector index
+# arriving in the server is a visible failure rather than something nobody
+# notices.
 #
 
 --echo #
@@ -78,18 +82,27 @@ INSERT INTO docs VALUES (6, 'too-wide', STRING_TO_VECTOR('[1.0, 2.0, 3.0, 4.0, 5
 DROP TABLE docs;
 
 --echo #
---echo # This server has no vector index and no distance function
+--echo # There is no similarity search, and no way to index a vector
 --echo #
---echo # Both halves of a nearest-neighbour search are missing, so there is
---echo # nothing here for the engine to answer.  If either arrives, this
---echo # section fails and the shared test is the one to run instead.
---echo #
+--echo # Indexing is the half that can be pinned by behaviour rather than by name:
+--echo # a vector is not a scalar the server can order, so every spelling of an
+--echo # index over one is refused.  If that ever stops being true, this fails and
+--echo # the vector-columns chapter needs revisiting.
 --error ER_PARSE_ERROR
 CREATE TABLE vidx (id INT PRIMARY KEY, v VECTOR(4) NOT NULL, VECTOR INDEX (v)) ENGINE=TidesDB;
 
---error ER_SP_DOES_NOT_EXIST
-SELECT VEC_DISTANCE_EUCLIDEAN(STRING_TO_VECTOR('[1,0,0,0]'),
-                              STRING_TO_VECTOR('[0,1,0,0]')) AS d;
+--error ER_NON_SCALAR_USED_AS_KEY
+CREATE TABLE vidx (id INT PRIMARY KEY, v VECTOR(4) NOT NULL, KEY (v)) ENGINE=TidesDB;
+
+--error ER_NON_SCALAR_USED_AS_KEY
+CREATE TABLE vidx (id INT PRIMARY KEY, v VECTOR(4) NOT NULL, FULLTEXT KEY (v)) ENGINE=TidesDB;
+
+--error ER_NON_SCALAR_USED_AS_KEY
+CREATE TABLE vidx (id INT PRIMARY KEY, v VECTOR(4) NOT NULL, SPATIAL KEY (v)) ENGINE=TidesDB;
+
+--echo # The distance-function half cannot be canaried the same way: there is no
+--echo # name to probe for that the server has committed to, so its absence is
+--echo # recorded in the chapter rather than asserted here.
 
 --source ../include/cleanup_tidesdb.inc
 --echo # Done.
