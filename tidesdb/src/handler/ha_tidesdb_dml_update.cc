@@ -45,7 +45,8 @@
    duplicate.  On a violation we set errkey/dup_ref and return the HA_ERR_* the caller surfaces; 0
    means clear. */
 int ha_tidesdb::update_check_unique(const uchar *old_data, const uchar *new_data,
-                                    const uchar *old_pk [[maybe_unused]], uint old_pk_len [[maybe_unused]], const uchar *new_pk,
+                                    const uchar *old_pk [[maybe_unused]],
+                                    uint old_pk_len [[maybe_unused]], const uchar *new_pk,
                                     uint new_pk_len, bool pk_changed)
 {
     tidesdb_trx_t *trx = cached_trx_;

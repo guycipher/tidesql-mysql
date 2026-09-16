@@ -299,13 +299,13 @@ int ha_tidesdb::index_read_secondary(uchar *buf, const uchar *comp_key, uint com
             ret = fetch_row_by_pk(scan_txn, ik + idx_col_len, (uint)(iks - idx_col_len), buf);
         if (ret == HA_ERR_KEY_NOT_FOUND)
         {
-                /* The entry outlived the row it points at.  An index entry and the row it
-                   names live in separate column families, so a scan can reach an entry whose
-                   row this snapshot cannot see, and one that is left behind is not something
-                   a reader can repair.  Either way the entry names no row, so the scan steps
-                   over it -- which is what the point-lookup paths in multi_range_read_next
-                   already do.  Returning the miss instead would end the whole scan, and the
-                   server has no way to report that as anything a caller can act on. */
+            /* The entry outlived the row it points at.  An index entry and the row it
+               names live in separate column families, so a scan can reach an entry whose
+               row this snapshot cannot see, and one that is left behind is not something
+               a reader can repair.  Either way the entry names no row, so the scan steps
+               over it -- which is what the point-lookup paths in multi_range_read_next
+               already do.  Returning the miss instead would end the whole scan, and the
+               server has no way to report that as anything a caller can act on. */
             if (is_backward)
                 tidesdb_iter_prev(scan_iter);
             else
@@ -602,7 +602,8 @@ int ha_tidesdb::index_last(uchar *buf)
     }
 }
 
-int ha_tidesdb::index_next_same(uchar *buf, const uchar *key [[maybe_unused]], uint keylen [[maybe_unused]])
+int ha_tidesdb::index_next_same(uchar *buf, const uchar *key [[maybe_unused]],
+                                uint keylen [[maybe_unused]])
 {
     DBUG_ENTER("ha_tidesdb::index_next_same");
 

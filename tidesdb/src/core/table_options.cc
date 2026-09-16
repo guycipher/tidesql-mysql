@@ -59,9 +59,8 @@ const spec specs[] = {
     {"l1_file_count_trigger", kind::number, TDB_OPT_OFFSET(l1_file_count_trigger), 1, 1024},
     {"tombstone_density_trigger", kind::number, TDB_OPT_OFFSET(tombstone_density_trigger), 0,
      10000},
-    {"tombstone_density_min_entries", kind::number,
-     TDB_OPT_OFFSET(tombstone_density_min_entries), 0,
-     std::numeric_limits<unsigned long long>::max()},
+    {"tombstone_density_min_entries", kind::number, TDB_OPT_OFFSET(tombstone_density_min_entries),
+     0, std::numeric_limits<unsigned long long>::max()},
     {"ttl", kind::number, TDB_OPT_OFFSET(ttl), 0, std::numeric_limits<unsigned long long>::max()},
     {"encryption_key_id", kind::number, TDB_OPT_OFFSET(encryption_key_id), 1, 255},
     {"compression", kind::compression, TDB_OPT_OFFSET(compression), 0, 0},
@@ -224,8 +223,7 @@ bool parse_attributes(const char *json, size_t len, const char *const *compressi
     const char *const end = json + len;
 
     skip_space(p, end);
-    if (p >= end)
-        return true; /* whitespace only, same as nothing said */
+    if (p >= end) return true; /* whitespace only, same as nothing said */
 
     if (*p != '{')
     {

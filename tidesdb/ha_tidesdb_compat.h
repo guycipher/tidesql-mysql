@@ -154,9 +154,9 @@ typedef std::ptrdiff_t my_ptrdiff_t;
    expression without the third.  the engine keeps
    no background row maintenance of its own, so it never needs to evaluate one of these expressions
    away from a server row. */
-#define TDB_TABLE_FLAGS_SERVER_EXTRA                                          \
-    (HA_DESCENDING_INDEX | HA_GENERATED_COLUMNS |                              \
-     HA_CAN_INDEX_VIRTUAL_GENERATED_COLUMN | HA_SUPPORTS_DEFAULT_EXPRESSION)
+#define TDB_TABLE_FLAGS_SERVER_EXTRA                                                      \
+    (HA_DESCENDING_INDEX | HA_GENERATED_COLUMNS | HA_CAN_INDEX_VIRTUAL_GENERATED_COLUMN | \
+     HA_SUPPORTS_DEFAULT_EXPRESSION)
 
 /* MySQL asks whether the primary key is clustered through the primary_key_is_clustered() virtual
    rather than a table flag, so this contributes nothing to table_flags() and the handler answers
@@ -195,8 +195,10 @@ typedef std::ptrdiff_t my_ptrdiff_t;
 #define TDB_DD_CREATE_ARG , dd::Table *dd_table_def
 #define TDB_DD_TABLE_ARG dd_table_def
 #define TDB_DD_DELETE_ARG , const dd::Table *dd_table_def [[maybe_unused]]
-#define TDB_DD_RENAME_ARG , const dd::Table *dd_from_def [[maybe_unused]], dd::Table *dd_to_def [[maybe_unused]]
-#define TDB_DD_ALTER_ARG , const dd::Table *dd_old_def [[maybe_unused]], dd::Table *dd_new_def [[maybe_unused]]
+#define TDB_DD_RENAME_ARG \
+    , const dd::Table *dd_from_def [[maybe_unused]], dd::Table *dd_to_def [[maybe_unused]]
+#define TDB_DD_ALTER_ARG \
+    , const dd::Table *dd_old_def [[maybe_unused]], dd::Table *dd_new_def [[maybe_unused]]
 #define TDB_TRUNCATE_ARG dd::Table *dd_table_def [[maybe_unused]]
 
 /* the largest unsigned long long, which one server publishes from its global header and MySQL
@@ -258,9 +260,9 @@ typedef std::ptrdiff_t my_ptrdiff_t;
    when it prepares a table: writing to a table without one builds a malformed row event out of an
    unassigned id, which is a crash rather than an error.  the check is expressed here so the
    cascade paths ask one question rather than repeating the two-part test at each call site. */
-#define TDB_TABLE_WRITABLE_IN_STMT(tbl)                    \
-    ((tbl)->file != nullptr && (tbl)->file->get_lock_type() == F_WRLCK && \
-     (tbl)->s != nullptr && (tbl)->s->table_map_id.is_valid())
+#define TDB_TABLE_WRITABLE_IN_STMT(tbl)                                                          \
+    ((tbl)->file != nullptr && (tbl)->file->get_lock_type() == F_WRLCK && (tbl)->s != nullptr && \
+     (tbl)->s->table_map_id.is_valid())
 
 /* how a cascade writes the child row.
  *
@@ -282,7 +284,8 @@ typedef std::ptrdiff_t my_ptrdiff_t;
 #define TDB_CASCADE_DELETE_ROW(child_ha, file, rec) \
     ((child_ha) ? (child_ha)->delete_row(rec) : (file)->ha_delete_row(rec))
 #define TDB_CASCADE_UPDATE_ROW(child_ha, file, old_rec, new_rec) \
-    ((child_ha) ? (child_ha)->update_row((old_rec), (new_rec)) : (file)->ha_update_row((old_rec), (new_rec)))
+    ((child_ha) ? (child_ha)->update_row((old_rec), (new_rec))   \
+                : (file)->ha_update_row((old_rec), (new_rec)))
 
 /* whether an externally prepared XA transaction stays attached to the connection that prepared it.
  *
@@ -310,8 +313,7 @@ typedef std::ptrdiff_t my_ptrdiff_t;
    transactions recovery exists to discard.  the state has to be recorded when it happens. */
 #define TDB_HTON_SET_PREPARED_IN_TC(hton, fn) ((hton)->set_prepared_in_tc = (fn))
 #define TDB_HTON_RECOVER_PREPARED_IN_TC(hton, fn) ((hton)->recover_prepared_in_tc = (fn))
-#define TDB_HTON_SET_PREPARED_IN_TC_BY_XID(hton, fn) \
-    ((hton)->set_prepared_in_tc_by_xid = (fn))
+#define TDB_HTON_SET_PREPARED_IN_TC_BY_XID(hton, fn) ((hton)->set_prepared_in_tc_by_xid = (fn))
 #define TDB_XA_HAS_PREPARED_IN_TC 1
 
 /* ******************** online DDL flags ******************** */
@@ -332,15 +334,15 @@ typedef std::ptrdiff_t my_ptrdiff_t;
 
 #define TDB_ALTER_FLAGS_T Alter_inplace_info::HA_ALTER_FLAGS
 
-#define TDB_ALTER_INSTANT_SET                                                                  \
-    (Alter_inplace_info::ALTER_COLUMN_NAME | Alter_inplace_info::ALTER_COLUMN_DEFAULT |        \
-     Alter_inplace_info::CHANGE_CREATE_OPTION | Alter_inplace_info::DROP_CHECK_CONSTRAINT |    \
-     Alter_inplace_info::ALTER_VIRTUAL_GCOL_EXPR | Alter_inplace_info::ALTER_RENAME |          \
-     Alter_inplace_info::RENAME_INDEX | Alter_inplace_info::CHANGE_INDEX_OPTION |              \
-     Alter_inplace_info::ADD_COLUMN | Alter_inplace_info::DROP_COLUMN |                        \
-     Alter_inplace_info::ALTER_STORED_COLUMN_ORDER |                                           \
-     Alter_inplace_info::ALTER_VIRTUAL_COLUMN_ORDER |                                          \
-     Alter_inplace_info::ALTER_COLUMN_COLUMN_FORMAT |                                          \
+#define TDB_ALTER_INSTANT_SET                                                               \
+    (Alter_inplace_info::ALTER_COLUMN_NAME | Alter_inplace_info::ALTER_COLUMN_DEFAULT |     \
+     Alter_inplace_info::CHANGE_CREATE_OPTION | Alter_inplace_info::DROP_CHECK_CONSTRAINT | \
+     Alter_inplace_info::ALTER_VIRTUAL_GCOL_EXPR | Alter_inplace_info::ALTER_RENAME |       \
+     Alter_inplace_info::RENAME_INDEX | Alter_inplace_info::CHANGE_INDEX_OPTION |           \
+     Alter_inplace_info::ADD_COLUMN | Alter_inplace_info::DROP_COLUMN |                     \
+     Alter_inplace_info::ALTER_STORED_COLUMN_ORDER |                                        \
+     Alter_inplace_info::ALTER_VIRTUAL_COLUMN_ORDER |                                       \
+     Alter_inplace_info::ALTER_COLUMN_COLUMN_FORMAT |                                       \
      Alter_inplace_info::ALTER_COLUMN_STORAGE_TYPE)
 
 /* ADD_SPATIAL_INDEX is a flag of its own on MySQL rather than part of the general add-index flag,
@@ -348,9 +350,9 @@ typedef std::ptrdiff_t my_ptrdiff_t;
    refuses a spatial index inplace, and it refuses it with a reason -- left outside the set, the
    statement falls through to the unreasoned refusal and the user is told only that the algorithm
    is unsupported. */
-#define TDB_ALTER_INDEX_SET                                                                    \
-    (Alter_inplace_info::ADD_INDEX | Alter_inplace_info::DROP_INDEX |                          \
-     Alter_inplace_info::ADD_UNIQUE_INDEX | Alter_inplace_info::DROP_UNIQUE_INDEX |            \
+#define TDB_ALTER_INDEX_SET                                                         \
+    (Alter_inplace_info::ADD_INDEX | Alter_inplace_info::DROP_INDEX |               \
+     Alter_inplace_info::ADD_UNIQUE_INDEX | Alter_inplace_info::DROP_UNIQUE_INDEX | \
      Alter_inplace_info::ADD_SPATIAL_INDEX)
 
 #define TDB_ALTER_PK_SET (Alter_inplace_info::ADD_PK_INDEX | Alter_inplace_info::DROP_PK_INDEX)
@@ -361,9 +363,9 @@ typedef std::ptrdiff_t my_ptrdiff_t;
 /* the pushed index condition.  one server publishes a shared evaluator that also checks the kill
    flag and the scan's end range; MySQL leaves every engine to assemble the same thing from the
    handler's own members, which is what InnoDB's innobase_index_cond does. */
-#define TDB_INDEX_COND_CHECK(h)                                                                \
-    (((h)->end_range && (h)->compare_key_icp((h)->end_range) > 0)                              \
-         ? ICP_OUT_OF_RANGE                                                                    \
+#define TDB_INDEX_COND_CHECK(h)                                   \
+    (((h)->end_range && (h)->compare_key_icp((h)->end_range) > 0) \
+         ? ICP_OUT_OF_RANGE                                       \
          : ((h)->pushed_idx_cond->val_int() ? ICP_MATCH : ICP_NO_MATCH))
 
 /* the length of a key prefix.  MySQL derives it from the keypart map alone, taking no key bytes. */
@@ -406,8 +408,8 @@ typedef std::ptrdiff_t my_ptrdiff_t;
    a constraint with.  the enforcement paths are unaffected; it is the read-back half that has no
    MySQL counterpart, and ha_tidesdb_fk.cc is excluded from the build there. */
 
-#define TDB_COST_METHOD_OVERRIDES                            \
-    double scan_time() override;                             \
+#define TDB_COST_METHOD_OVERRIDES                                     \
+    double scan_time() override;                                      \
     double read_time(uint index, uint ranges, ha_rows rows) override; \
     double index_only_read_time(uint keynr, double records) override;
 
@@ -538,7 +540,8 @@ typedef std::ptrdiff_t my_ptrdiff_t;
 /* the parts of an XID the engine serialises.  the transaction is stored under a key it must be
    reconstructable from, because recovery has to hand the server back the same XID the user named,
    so every part is read and written explicitly rather than copied as a struct image.  MySQL keeps
-   the fields private behind accessors, so only the reads need naming here; set() is used directly. */
+   the fields private behind accessors, so only the reads need naming here; set() is used directly.
+ */
 #define TDB_XID_FORMAT_ID(xid) ((long)(xid)->get_format_id())
 #define TDB_XID_GTRID_LEN(xid) ((long)(xid)->get_gtrid_length())
 #define TDB_XID_BQUAL_LEN(xid) ((long)(xid)->get_bqual_length())
@@ -582,23 +585,23 @@ typedef std::ptrdiff_t my_ptrdiff_t;
    allocated from the recovery MEM_ROOT it also hands the engine.
 
    the names are copied onto the MEM_ROOT because the server reads them well after this returns. */
-#define TDB_RECOVER_ATTACH_MOD_TABLES(xid_list, n, mem_root, names)                            \
-    do                                                                                         \
-    {                                                                                          \
-        auto *tdb_mt_ = new ((mem_root)) List<st_handler_tablename>();                         \
-        (xid_list)[n].mod_tables = tdb_mt_;                                                    \
-        if (tdb_mt_)                                                                            \
-            for (const auto &tdb_nm_ : (names))                                                \
-            {                                                                                  \
-                auto *tdb_tn_ = new ((mem_root)) st_handler_tablename();                       \
-                if (!tdb_tn_) break;                                                            \
-                tdb_tn_->db = strmake_root((mem_root), tdb_nm_.first.c_str(),                  \
-                                           tdb_nm_.first.size());                              \
-                tdb_tn_->tablename = strmake_root((mem_root), tdb_nm_.second.c_str(),          \
-                                                  tdb_nm_.second.size());                      \
-                if (!tdb_tn_->db || !tdb_tn_->tablename) break;                                 \
-                if (tdb_mt_->push_back(tdb_tn_, (mem_root))) break;                            \
-            }                                                                                  \
+#define TDB_RECOVER_ATTACH_MOD_TABLES(xid_list, n, mem_root, names)                          \
+    do                                                                                       \
+    {                                                                                        \
+        auto *tdb_mt_ = new ((mem_root)) List<st_handler_tablename>();                       \
+        (xid_list)[n].mod_tables = tdb_mt_;                                                  \
+        if (tdb_mt_)                                                                         \
+            for (const auto &tdb_nm_ : (names))                                              \
+            {                                                                                \
+                auto *tdb_tn_ = new ((mem_root)) st_handler_tablename();                     \
+                if (!tdb_tn_) break;                                                         \
+                tdb_tn_->db =                                                                \
+                    strmake_root((mem_root), tdb_nm_.first.c_str(), tdb_nm_.first.size());   \
+                tdb_tn_->tablename =                                                         \
+                    strmake_root((mem_root), tdb_nm_.second.c_str(), tdb_nm_.second.size()); \
+                if (!tdb_tn_->db || !tdb_tn_->tablename) break;                              \
+                if (tdb_mt_->push_back(tdb_tn_, (mem_root))) break;                          \
+            }                                                                                \
     } while (0)
 
 /* ordered group commit.  MySQL orders commits in the binlog coordinator and publishes no engine
@@ -686,10 +689,19 @@ typedef std::ptrdiff_t my_ptrdiff_t;
    MySQL publishes no SHOW_FUNC_ENTRY helper, so function-valued entries are built longhand, and
    TDB_SHOW_FUNC_SIG supplies the parameter list so each body names it once. */
 #define TDB_SHOW_VAR_TYPE SHOW_VAR
-#define TDB_SHOW_VAR_ENTRY(name, value, type) {(name), (char *)(value), (type), SHOW_SCOPE_GLOBAL}
-#define TDB_SHOW_FUNC_ENTRY(name, fn) {(name), (char *)(fn), SHOW_FUNC, SHOW_SCOPE_GLOBAL}
-#define TDB_SHOW_VAR_END {NullS, NullS, SHOW_LONGLONG, SHOW_SCOPE_GLOBAL}
-#define TDB_SHOW_FUNC_SIG(var_arg, buf_arg) (MYSQL_THD, SHOW_VAR *var_arg, char *buf_arg)
+#define TDB_SHOW_VAR_ENTRY(name, value, type)              \
+    {                                                      \
+        (name), (char *)(value), (type), SHOW_SCOPE_GLOBAL \
+    }
+#define TDB_SHOW_FUNC_ENTRY(name, fn)                      \
+    {                                                      \
+        (name), (char *)(fn), SHOW_FUNC, SHOW_SCOPE_GLOBAL \
+    }
+#define TDB_SHOW_VAR_END                               \
+    {                                                  \
+        NullS, NullS, SHOW_LONGLONG, SHOW_SCOPE_GLOBAL \
+    }
+#define TDB_SHOW_FUNC_SIG(var_arg, buf_arg) (MYSQL_THD, SHOW_VAR * var_arg, char *buf_arg)
 
 /* ******************** per-table options ******************** */
 

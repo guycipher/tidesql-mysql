@@ -525,7 +525,8 @@ bool ha_tidesdb::icp_decode_key_parts(KEY *key, const uint8_t *&pos, const uint8
     return true;
 }
 
-tdb_icp_result_t ha_tidesdb::icp_check_secondary(const uint8_t *ik, size_t iks, uint idx, uchar *buf)
+tdb_icp_result_t ha_tidesdb::icp_check_secondary(const uint8_t *ik, size_t iks, uint idx,
+                                                 uchar *buf)
 {
     if (!pushed_idx_cond || pushed_idx_cond_keyno != idx) return TDB_ICP_MATCH;
 

@@ -45,53 +45,19 @@
 #include "src/handler/ha_tidesdb_keycodec.h"
 #include "src/handler/ha_tidesdb_spatial.h"
 ha_tidesdb::ha_tidesdb(handlerton *hton, TABLE_SHARE *table_arg)
-    : handler(hton, table_arg),
-      share(NULL),
-      stmt_txn(NULL),
-      stmt_txn_dirty(false),
-      scan_txn(NULL),
-      scan_iter(NULL),
-      scan_cf_(NULL),
-      scan_iter_cf_(NULL),
-      scan_iter_txn_(NULL),
-      scan_iter_txn_gen_(0),
-      idx_pk_exact_done_(false),
-      scan_dir_(DIR_NONE),
-      current_pk_len_(0),
-      idx_search_comp_len_(0),
-      cached_enc_key_ver_(0),
-      enc_key_ver_valid_(false),
-      cached_time_(0),
-      cached_time_valid_(false),
-      cached_sess_ttl_(0),
-      cached_skip_unique_(false),
-      cached_single_delete_primary_(false),
-      cached_thdvars_valid_(false),
-      is_pk_(false),
-      scan_iter_last_err_(0),
-      scan_iter_last_err_cf_(NULL),
-      scan_iter_last_err_txn_(NULL),
-      has_blobs_(false),
-      encrypted_(false),
-      record1_lo_(NULL),
-      record1_hi_(NULL),
-      cached_sql_cmd_(0),
-      cached_is_autocommit_(false),
-      cached_stmt_shape_valid_(false),
-      cached_thd_(NULL),
-      cached_trx_(NULL),
-      in_bulk_insert_(false),
-      in_bulk_update_(false),
-      in_bulk_delete_(false),
-      bulk_insert_ops_(0),
-      cached_compact_after_range_delete_min_rows_(0),
-      bulk_delete_rows_(0),
-      mrr_custom_active_(false),
-      mrr_no_assoc_(false),
-      mrr_keyno_(MAX_KEY),
-      mrr_next_idx_(0),
-      keyread_only_(false),
-      write_can_replace_(false)
+    : handler(hton, table_arg), share(NULL), stmt_txn(NULL), stmt_txn_dirty(false), scan_txn(NULL),
+      scan_iter(NULL), scan_cf_(NULL), scan_iter_cf_(NULL), scan_iter_txn_(NULL),
+      scan_iter_txn_gen_(0), idx_pk_exact_done_(false), scan_dir_(DIR_NONE), current_pk_len_(0),
+      idx_search_comp_len_(0), cached_enc_key_ver_(0), enc_key_ver_valid_(false), cached_time_(0),
+      cached_time_valid_(false), cached_sess_ttl_(0), cached_skip_unique_(false),
+      cached_single_delete_primary_(false), cached_thdvars_valid_(false), is_pk_(false),
+      scan_iter_last_err_(0), scan_iter_last_err_cf_(NULL), scan_iter_last_err_txn_(NULL),
+      has_blobs_(false), encrypted_(false), record1_lo_(NULL), record1_hi_(NULL),
+      cached_sql_cmd_(0), cached_is_autocommit_(false), cached_stmt_shape_valid_(false),
+      cached_thd_(NULL), cached_trx_(NULL), in_bulk_insert_(false), in_bulk_update_(false),
+      in_bulk_delete_(false), bulk_insert_ops_(0), cached_compact_after_range_delete_min_rows_(0),
+      bulk_delete_rows_(0), mrr_custom_active_(false), mrr_no_assoc_(false), mrr_keyno_(MAX_KEY),
+      mrr_next_idx_(0), keyread_only_(false), write_can_replace_(false)
 {
 }
 
@@ -525,7 +491,8 @@ void ha_tidesdb::open_build_index_meta(const char *name)
     if (mysql_file_stat(0, frm_path, &st_buf, MYF(0))) share->create_time = st_buf.st_mtime;
 }
 
-int ha_tidesdb::open(const char *name, int mode [[maybe_unused]], uint test_if_locked [[maybe_unused]] TDB_DD_OPEN_ARG)
+int ha_tidesdb::open(const char *name, int mode [[maybe_unused]],
+                     uint test_if_locked [[maybe_unused]] TDB_DD_OPEN_ARG)
 {
     DBUG_ENTER("ha_tidesdb::open");
 
@@ -675,8 +642,7 @@ int ha_tidesdb::create(const char *name, TABLE *table_arg,
 
     /* Record any foreign keys declared on this table in the engine catalog so
        both sides load them at open and the row operations can enforce them. */
-    if (int frc = fk_persist_defs(name, table_arg, create_info, TDB_DD_TABLE_ARG))
-        DBUG_RETURN(frc);
+    if (int frc = fk_persist_defs(name, table_arg, create_info, TDB_DD_TABLE_ARG)) DBUG_RETURN(frc);
 
     /* The families now exist.  Where DDL is transactional the statement may still roll back, so
        record them; the atomicity layer removes them again if it does. */

@@ -27,7 +27,13 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest, windows-2022]
+        # Both macOS architectures, on the image whose default toolchain the
+        # server actually builds with.  macos-latest is macOS 26, whose Xcode 26
+        # libc++ no longer provides std::is_trivial_v -- a trait MySQL's own
+        # libs/mysql/gtid/tag_plain.h static_asserts on at C++23, so the server
+        # fails to compile there and no change to this plugin can help.  macos-15
+        # defaults to Xcode 16 and is selected explicitly below.
+        os: [ubuntu-latest, macos-15, macos-15-intel, windows-2022]
 
     steps:
       # The test suite is assembled from symlinks (see "Materialize" below), and a
@@ -48,16 +54,30 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y \
             build-essential cmake ninja-build git bison ccache pkg-config \
-            libssl-dev libncurses-dev libudev-dev \
+            libssl-dev libncurses-dev libudev-dev libcurl4-openssl-dev \
             liblz4-dev libzstd-dev libsnappy-dev
 
       - name: Install dependencies (macOS)
         if: runner.os == 'macOS'
         run: |
-          brew install cmake ninja bison openssl@3 lz4 zstd snappy ccache
+          brew install cmake ninja bison openssl@3 lz4 zstd snappy ccache curl
           # macOS ships bison 2.3; the server's parser needs 3.x, so the keg-only
           # one has to come first on PATH for the whole job.
           echo "$(brew --prefix bison)/bin" >> "$GITHUB_PATH"
+
+      - name: Select a toolchain the server compiles with (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          set -eu
+          # The image carries Xcode 26 alongside 16, and 26's libc++ dropped
+          # std::is_trivial_v.  Pick the newest Xcode 16 rather than inheriting
+          # whatever the image happens to default to, so a default bump does not
+          # silently break the build.  Falls through to the default if none is
+          # installed, and prints what it chose either way.
+          XC=$(ls -d /Applications/Xcode_16*.app 2>/dev/null | sort -V | tail -1 || true)
+          if [ -n "${XC:-}" ]; then sudo xcode-select -s "$XC"; fi
+          xcodebuild -version
+          c++ --version
 
       - name: Install dependencies (Windows)
         if: runner.os == 'Windows'
@@ -105,10 +125,27 @@ jobs:
             # allocator and the plugin needs no LD_PRELOAD to load.  A build that
             # turns jemalloc/mimalloc/tcmalloc on would -- see
             # doc/01-getting-started/install.md.
-            cmake -S tidesdb-src -B tidesdb-build -DCMAKE_BUILD_TYPE=Release \
-              -DCMAKE_INSTALL_PREFIX="$PWD/tidesdb-install"
-            cmake --build tidesdb-build --parallel
-            cmake --install tidesdb-build
+            # The compression backends come from vcpkg on Windows, and the library
+            # locates them with find_package -- which only sees them through the
+            # vcpkg toolchain file.  Visual Studio is also a multi-config generator,
+            # so build and install have to name the configuration explicitly or they
+            # default to Debug and the install finds nothing.
+            # Written as two whole commands rather than one with array-built flags:
+            # macOS runners still ship bash 3.2, where expanding an empty array under
+            # set -u aborts the step.
+            if [ "$RUNNER_OS" = "Windows" ]; then
+              cmake -S tidesdb-src -B tidesdb-build -DCMAKE_BUILD_TYPE=Release \
+                -DCMAKE_INSTALL_PREFIX="$PWD/tidesdb-install" \
+                -DCMAKE_TOOLCHAIN_FILE="$VCPKG_INSTALLATION_ROOT/scripts/buildsystems/vcpkg.cmake" \
+                -DVCPKG_TARGET_TRIPLET=x64-windows
+              cmake --build tidesdb-build --parallel --config Release
+              cmake --install tidesdb-build --config Release
+            else
+              cmake -S tidesdb-src -B tidesdb-build -DCMAKE_BUILD_TYPE=Release \
+                -DCMAKE_INSTALL_PREFIX="$PWD/tidesdb-install"
+              cmake --build tidesdb-build --parallel
+              cmake --install tidesdb-build
+            fi
           fi
           echo "TIDESDB_ROOT=$PWD/tidesdb-install" >> "$GITHUB_ENV"
 
@@ -223,7 +260,13 @@ jobs:
         if: runner.os == 'Windows'
         shell: bash
         working-directory: mysql-server/build/mysql-test
-        run: perl mysql-test-run.pl --suite=tidesdb,tidesdb_rpl --parallel=2 --force --retry=1 2>&1 | tee ../../../mtr.log
+        run: |
+          set -euo pipefail
+          # libtidesdb and the vcpkg compression DLLs are loaded at runtime when the
+          # server dlopens the plugin; without them on PATH every test fails to load
+          # the engine rather than failing on anything it tests.
+          export PATH="$VCPKG_INSTALLATION_ROOT/installed/x64-windows/bin:$GITHUB_WORKSPACE/tidesdb-install/bin:$PATH"
+          perl mysql-test-run.pl --suite=tidesdb,tidesdb_rpl --parallel=2 --force --retry=1 2>&1 | tee ../../../mtr.log
 
       # mtr reports success for an empty run, so a suite it failed to find would
       # otherwise pass.  The floor is deliberately loose: it catches "nothing ran",
@@ -271,7 +314,7 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y \
             build-essential cmake ninja-build git bison ccache pkg-config \
-            libssl-dev libncurses-dev libudev-dev \
+            libssl-dev libncurses-dev libudev-dev libcurl4-openssl-dev \
             liblz4-dev libzstd-dev libsnappy-dev
 
       - name: Configure ccache

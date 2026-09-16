@@ -399,8 +399,7 @@ int ha_tidesdb::delete_row(const uchar *buf)
        neither deletes by current_pk_buf_ and never reads buf, so it skips the
        per-row bitmap flip entirely. */
     const bool flip_read_set = share->num_secondary_indexes != 0 || !share->fk_parent.empty();
-    TDB_COLUMN_MAP_SAVED old_map =
-        flip_read_set ? TDB_USE_ALL_COLUMNS(table, read_set) : nullptr;
+    TDB_COLUMN_MAP_SAVED old_map = flip_read_set ? TDB_USE_ALL_COLUMNS(table, read_set) : nullptr;
 
     /* We use cached_trx_ from external_lock to avoid per-row hash lookups. */
     tidesdb_trx_t *trx = cached_trx_;
@@ -615,10 +614,9 @@ int ha_tidesdb::maybe_bulk_commit(tidesdb_trx_t *trx)
     int crc = tdb_txn_commit_blocking(cached_thd_, trx->txn);
     if (crc != TDB_SUCCESS)
     {
-        sql_print_error(
-            "[TIDESDB] bulk mid-commit failed rc=%d -- aborting statement to "
-            "avoid silent row loss",
-            crc);
+        sql_print_error("[TIDESDB] bulk mid-commit failed rc=%d -- aborting statement to "
+                        "avoid silent row loss",
+                        crc);
         /* Release the txn's buffered state.  Even if rollback itself fails
            we still free+begin below so the connection is usable. */
         (void)tidesdb_txn_rollback(trx->txn);
@@ -628,8 +626,7 @@ int ha_tidesdb::maybe_bulk_commit(tidesdb_trx_t *trx)
            that does not validate writes would leave the rest of a large statement unchecked
            against concurrent writers, which is exactly the case a long statement is most
            exposed to. */
-        int brc =
-            tidesdb_txn_begin_with_isolation(tdb_global, trx->isolation_level, &trx->txn);
+        int brc = tidesdb_txn_begin_with_isolation(tdb_global, trx->isolation_level, &trx->txn);
         if (brc != TDB_SUCCESS) return tdb_rc_to_ha(brc, "bulk_commit txn_begin(after_fail)");
         trx->txn_generation++;
         stmt_txn = trx->txn;
@@ -652,10 +649,9 @@ int ha_tidesdb::maybe_bulk_commit(tidesdb_trx_t *trx)
     int rrc = tidesdb_txn_reset(trx->txn, trx->isolation_level);
     if (rrc != TDB_SUCCESS)
     {
-        sql_print_warning(
-            "[TIDESDB] bulk tidesdb_txn_reset failed (rc=%d), falling back to "
-            "free+begin",
-            rrc);
+        sql_print_warning("[TIDESDB] bulk tidesdb_txn_reset failed (rc=%d), falling back to "
+                          "free+begin",
+                          rrc);
         tidesdb_txn_free(trx->txn);
         trx->txn = NULL;
         int rc = tidesdb_txn_begin_with_isolation(tdb_global, trx->isolation_level, &trx->txn);
@@ -947,17 +943,17 @@ ha_rows ha_tidesdb::multi_range_read_info_const(uint keyno, RANGE_SEQ_IF *seq, v
 {
     /* We compute the default cost + flags first so non-accepted sequences fall
        through to the server's MRR->read_range_first path with correct costing. */
-    ha_rows rows = handler::multi_range_read_info_const(keyno, seq, seq_init_param, n_ranges_arg,
-                                                        bufsz, mrr_mode,
-                                                       TDB_MRR_INFO_CONST_TAIL_ARG, cost);
+    ha_rows rows =
+        handler::multi_range_read_info_const(keyno, seq, seq_init_param, n_ranges_arg, bufsz,
+                                             mrr_mode, TDB_MRR_INFO_CONST_TAIL_ARG, cost);
     if (rows == HA_POS_ERROR) return rows;
 
-        /* Partitioned tables are served by ha_partition, which dispatches
-           multi_range_read_* across child handlers using its own DS-MRR-backed
-           logic.  If we clear HA_MRR_USE_DEFAULT_IMPL here, ha_partition's
-           ordered-index-scan path ends up invoking our custom _next without
-           the state its own ordering logic expects and crashes.  Refuse to
-           accept MRR for partitioned tables -- the default path runs correctly. */
+    /* Partitioned tables are served by ha_partition, which dispatches
+       multi_range_read_* across child handlers using its own DS-MRR-backed
+       logic.  If we clear HA_MRR_USE_DEFAULT_IMPL here, ha_partition's
+       ordered-index-scan path ends up invoking our custom _next without
+       the state its own ordering logic expects and crashes.  Refuse to
+       accept MRR for partitioned tables -- the default path runs correctly. */
     if (TDB_TABLE_IS_PARTITIONED(table)) return rows;
 
     /* Probe the sequence, we accept only if every range is a full single-point

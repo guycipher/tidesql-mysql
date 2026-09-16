@@ -43,11 +43,11 @@ struct ha_table_option_struct
     unsigned int compression;
     unsigned int isolation_level;
     bool bloom_filter;
-    bool keep_values_inline;               /* hold every value in the klog, ignoring the db
-                                              value_separation_threshold */
-    unsigned long long ttl;                /* default TTL in seconds (0 = no expiration) */
-    bool encrypted;                        /* data-at-rest encryption */
-    unsigned long long encryption_key_id;  /* which key encrypts it (default 1) */
+    bool keep_values_inline;              /* hold every value in the klog, ignoring the db
+                                             value_separation_threshold */
+    unsigned long long ttl;               /* default TTL in seconds (0 = no expiration) */
+    bool encrypted;                       /* data-at-rest encryption */
+    unsigned long long encryption_key_id; /* which key encrypts it (default 1) */
     /* Tombstone-density compaction trigger.  Stored as parts-per-10000 (e.g. 5000 = 0.50 ratio)
        so the option list can use integer storage; converted to a double at build_cf_config time. */
     unsigned long long tombstone_density_trigger;

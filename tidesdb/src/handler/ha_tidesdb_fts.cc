@@ -101,10 +101,9 @@ static int fts_update_meta(THD *thd, tidesdb_txn_t *txn, tidesdb_column_family_t
     int rrc = fts_load_meta(txn, data_cf, keynr, &total_docs, &total_words);
     if (rrc != TDB_SUCCESS && rrc != TDB_ERR_NOT_FOUND)
     {
-        sql_print_error(
-            "[TIDESDB] fts_update_meta: skipping meta write for keynr=%u "
-            "because fts_load_meta failed (rc=%d); BM25 totals are unchanged",
-            keynr, rrc);
+        sql_print_error("[TIDESDB] fts_update_meta: skipping meta write for keynr=%u "
+                        "because fts_load_meta failed (rc=%d); BM25 totals are unchanged",
+                        keynr, rrc);
         return rrc;
     }
 
@@ -205,8 +204,8 @@ static void tdb_rebuild_blend_map(const char *chars)
     for (const char *p = chars; *p; p++) tdb_blend_char_map[(unsigned char)*p] = true;
 }
 
-void tdb_fts_blend_chars_update(MYSQL_THD thd [[maybe_unused]], TDB_SYS_VAR *var [[maybe_unused]], void *var_ptr,
-                                const void *save)
+void tdb_fts_blend_chars_update(MYSQL_THD thd [[maybe_unused]], TDB_SYS_VAR *var [[maybe_unused]],
+                                void *var_ptr, const void *save)
 {
     const char *new_val = *static_cast<const char *const *>(save);
     mysql_rwlock_wrlock(&tdb_blend_lock);
@@ -327,10 +326,9 @@ static bool tdb_load_stopwords_from_table_spec(const char *table_spec)
 
     if (!sw_cf)
     {
-        sql_print_warning(
-            "[TIDESDB] Stop word table '%s' not found as TidesDB CF '%s'. "
-            "The table must be a TidesDB ENGINE table. Keeping current stop words.",
-            table_spec, cf_name.c_str());
+        sql_print_warning("[TIDESDB] Stop word table '%s' not found as TidesDB CF '%s'. "
+                          "The table must be a TidesDB ENGINE table. Keeping current stop words.",
+                          table_spec, cf_name.c_str());
         return false;
     }
 
@@ -368,8 +366,8 @@ static bool tdb_load_stopwords_from_table_spec(const char *table_spec)
 }
 
 /* Sysvar update callback for tidesdb_ft_stopword_table */
-void tdb_ft_stopword_table_update(MYSQL_THD thd [[maybe_unused]], TDB_SYS_VAR *var [[maybe_unused]], void *var_ptr,
-                                  const void *save)
+void tdb_ft_stopword_table_update(MYSQL_THD thd [[maybe_unused]], TDB_SYS_VAR *var [[maybe_unused]],
+                                  void *var_ptr, const void *save)
 {
     const char *new_val = *static_cast<const char *const *>(save);
     mysql_rwlock_wrlock(&tdb_stopword_lock);

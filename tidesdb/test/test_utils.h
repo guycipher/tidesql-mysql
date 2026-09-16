@@ -31,7 +31,7 @@ static int tests_skipped = 0;
 
 #define ASSERT_EQ(a, b) assert((a) == (b))
 #define ASSERT_NE(a, b) assert((a) != (b))
-#define ASSERT_TRUE(a)  assert(a)
+#define ASSERT_TRUE(a) assert(a)
 #define ASSERT_FALSE(a) assert(!(a))
 
 #define RUN_TEST(test_func, tests_passed)                    \

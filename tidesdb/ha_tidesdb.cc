@@ -57,10 +57,10 @@ extern "C"
 #include "src/engine/ha_tidesdb_config.h"
 #include "src/engine/ha_tidesdb_crypto.h"
 #include "src/engine/ha_tidesdb_status.h"
+#include "src/handler/ha_tidesdb_ddl_atomicity.h"
 #include "src/handler/ha_tidesdb_fts.h"
 #include "src/handler/ha_tidesdb_internal.h"
 #include "src/handler/ha_tidesdb_keycodec.h"
-#include "src/handler/ha_tidesdb_ddl_atomicity.h"
 #include "src/handler/ha_tidesdb_lifecycle.h"
 #include "src/handler/ha_tidesdb_spatial.h"
 #include "src/handler/ha_tidesdb_txn.h"
@@ -535,8 +535,7 @@ static MYSQL_SYSVAR_STR(data_home_dir, srv_data_home_dir, PLUGIN_VAR_RQCMDARG | 
 
 static char *srv_backup_dir = NULL;
 
-static void tidesdb_backup_dir_update(THD *thd, TDB_SYS_VAR *, void *var_ptr,
-                                      const void *save)
+static void tidesdb_backup_dir_update(THD *thd, TDB_SYS_VAR *, void *var_ptr, const void *save)
 {
     const char *new_dir = *static_cast<const char *const *>(save);
 
@@ -615,8 +614,7 @@ static MYSQL_SYSVAR_STR(backup_dir, srv_backup_dir, PLUGIN_VAR_RQCMDARG | PLUGIN
 
 static char *srv_checkpoint_dir = NULL;
 
-static void tidesdb_checkpoint_dir_update(THD *thd, TDB_SYS_VAR *, void *var_ptr,
-                                          const void *save)
+static void tidesdb_checkpoint_dir_update(THD *thd, TDB_SYS_VAR *, void *var_ptr, const void *save)
 {
     const char *new_dir = *static_cast<const char *const *>(save);
 
@@ -847,21 +845,11 @@ TDB_TABLE_OPTION_LISTS
 /* ******************** TidesDB_share ******************** */
 
 TidesDB_share::TidesDB_share()
-    : cf(NULL),
-      has_user_pk(false),
-      pk_index(0),
-      pk_key_len(0),
-      next_row_id(1),
-      isolation_level(TDB_ISOLATION_REPEATABLE_READ),
-      default_ttl(0),
-      ttl_field_idx(TIDESDB_TTL_FIELD_NONE),
-      encrypted(false),
-      encryption_key_id(TIDESDB_DEFAULT_ENCRYPTION_KEY_ID),
-      encryption_key_version(0),
-      options(),
-      has_blobs(false),
-      has_ttl(false),
-      num_secondary_indexes(0)
+    : cf(NULL), has_user_pk(false), pk_index(0), pk_key_len(0), next_row_id(1),
+      isolation_level(TDB_ISOLATION_REPEATABLE_READ), default_ttl(0),
+      ttl_field_idx(TIDESDB_TTL_FIELD_NONE), encrypted(false),
+      encryption_key_id(TIDESDB_DEFAULT_ENCRYPTION_KEY_ID), encryption_key_version(0), options(),
+      has_blobs(false), has_ttl(false), num_secondary_indexes(0)
 {
     memset(idx_comp_key_len, 0, sizeof(idx_comp_key_len));
     memset(idx_is_fts, 0, sizeof(idx_is_fts));
@@ -1090,7 +1078,8 @@ void ha_tidesdb::cache_stmt_thdvars()
   counter on TidesDB_share that is seeded once from the table data at open time
   and atomically incremented thereafter -- O(1).
 */
-void ha_tidesdb::get_auto_increment(ulonglong offset [[maybe_unused]], ulonglong increment [[maybe_unused]],
+void ha_tidesdb::get_auto_increment(ulonglong offset [[maybe_unused]],
+                                    ulonglong increment [[maybe_unused]],
                                     ulonglong nb_desired_values, ulonglong *first_value,
                                     ulonglong *nb_reserved_values)
 {

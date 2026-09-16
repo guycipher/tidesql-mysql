@@ -297,11 +297,10 @@ static tidesdb_trx_t *get_or_create_trx(THD *thd, handlerton *hton, tidesdb_isol
                 /* Reset failed -- we fall back to free + begin.  Surface the
                    failure so we can spot regressions in txn recycling instead
                    of silently degrading to per-statement free+begin. */
-                sql_print_warning(
-                    "[TIDESDB] tidesdb_txn_reset failed (rc=%d), falling back to "
-                    "free+begin -- expect higher per-statement overhead until "
-                    "this is investigated",
-                    rrc);
+                sql_print_warning("[TIDESDB] tidesdb_txn_reset failed (rc=%d), falling back to "
+                                  "free+begin -- expect higher per-statement overhead until "
+                                  "this is investigated",
+                                  rrc);
                 tidesdb_txn_free(trx->txn);
                 trx->txn = NULL;
                 int rc = tidesdb_txn_begin_with_isolation(tdb_global, iso, &trx->txn);
@@ -455,10 +454,9 @@ static int tdb_finalize_commit(THD *thd, tidesdb_trx_t *trx)
         {
             /* Only log truly unexpected errors (not transient conflicts). */
             if (rc != TDB_ERR_CONFLICT && rc != TDB_ERR_LOCKED && rc != TDB_ERR_MEMORY_LIMIT)
-                sql_print_error(
-                    "[TIDESDB] hton_commit: tidesdb_txn_commit returned %d "
-                    "(dirty=%d gen=%lu)",
-                    rc, trx->dirty, (unsigned long)trx->txn_generation);
+                sql_print_error("[TIDESDB] hton_commit: tidesdb_txn_commit returned %d "
+                                "(dirty=%d gen=%lu)",
+                                rc, trx->dirty, (unsigned long)trx->txn_generation);
             tdb_txn_rollback_stateful(trx->txn);
             tidesdb_txn_free(trx->txn);
             trx->txn = NULL;
@@ -702,8 +700,8 @@ int ha_tidesdb::ensure_stmt_txn()
     if (is_ddl)
         effective_iso = TDB_ISOLATION_READ_COMMITTED;
     else
-        effective_iso = resolve_effective_isolation(
-            thd, share ? share->isolation_level : TDB_ISOLATION_SNAPSHOT);
+        effective_iso = resolve_effective_isolation(thd, share ? share->isolation_level
+                                                               : TDB_ISOLATION_SNAPSHOT);
     tidesdb_trx_t *trx = get_or_create_trx(thd, ht, effective_iso);
     if (!trx) return HA_ERR_OUT_OF_MEM;
 
@@ -732,8 +730,8 @@ int ha_tidesdb::external_lock_acquire(THD *thd)
     if (is_ddl)
         effective_iso = TDB_ISOLATION_READ_COMMITTED;
     else
-        effective_iso = resolve_effective_isolation(
-            thd, share ? share->isolation_level : TDB_ISOLATION_SNAPSHOT);
+        effective_iso = resolve_effective_isolation(thd, share ? share->isolation_level
+                                                               : TDB_ISOLATION_SNAPSHOT);
     tidesdb_trx_t *trx = get_or_create_trx(thd, ht, effective_iso);
     if (!trx) return HA_ERR_OUT_OF_MEM;
 
@@ -1021,8 +1019,8 @@ static int tidesdb_recover(TDB_RECOVER_ARGS)
 
         static const std::vector<std::pair<std::string, std::string>> none;
         auto found = tdb_recovery_mod_tables.find(k);
-        TDB_RECOVER_ATTACH_MOD_TABLES(xid_list, n, mem_root,
-                                      found == tdb_recovery_mod_tables.end() ? none : found->second);
+        TDB_RECOVER_ATTACH_MOD_TABLES(
+            xid_list, n, mem_root, found == tdb_recovery_mod_tables.end() ? none : found->second);
         n++;
     }
     return (int)n;
@@ -1147,9 +1145,9 @@ static bool tdb_xa_tc_mark(const std::string &key, const tdb_table_names_t &tabl
     if (tidesdb_txn_begin(tdb_global, &txn) != TDB_SUCCESS) return false;
 
     const std::string rec = tdb_xa_tc_encode(tables);
-    bool ok = tidesdb_txn_put(txn, cf, (const uint8_t *)key.data(), key.size(),
-                              (const uint8_t *)rec.data(), rec.size(),
-                              TIDESDB_TTL_NONE) == TDB_SUCCESS;
+    bool ok =
+        tidesdb_txn_put(txn, cf, (const uint8_t *)key.data(), key.size(),
+                        (const uint8_t *)rec.data(), rec.size(), TIDESDB_TTL_NONE) == TDB_SUCCESS;
     if (ok)
         ok = tidesdb_txn_commit(txn) == TDB_SUCCESS;
     else

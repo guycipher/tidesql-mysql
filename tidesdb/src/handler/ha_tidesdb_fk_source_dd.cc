@@ -90,7 +90,8 @@ bool tdb_fk_extract_specs(THD *, TABLE *table_arg, HA_CREATE_INFO *, const void 
                               fk->referenced_table_name().length());
 
         /* Elements are the column pairs, and the dictionary keeps them in the constraint's declared
-           order, which is the order the engine's catalog format and its key encoding both assume. */
+           order, which is the order the engine's catalog format and its key encoding both assume.
+         */
         for (const dd::Foreign_key_element *el : fk->elements())
         {
             if (!el) continue;
@@ -119,8 +120,7 @@ bool tdb_fk_resolve_parent_index(THD *thd, const std::string &ref_db, const std:
     /* the dictionary uses its own string type, which does not implicitly convert */
     const dd::String_type dd_schema(ref_db.c_str(), ref_db.size());
     const dd::String_type dd_table(ref_table.c_str(), ref_table.size());
-    if (thd->dd_client()->acquire(dd_schema, dd_table, &parent) || parent == nullptr)
-        return false;
+    if (thd->dd_client()->acquire(dd_schema, dd_table, &parent) || parent == nullptr) return false;
 
     const dd::Index *best = nullptr;
     for (const dd::Index *idx : parent->indexes())

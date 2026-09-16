@@ -42,8 +42,8 @@
  * post-DDL hook runs after the dictionary transaction has committed or rolled back, so it simply
  * asks the dictionary whether the table exists and acts on the answer:
  *
- *     dropped, and the dictionary no longer has the table   -> the drop committed, remove the families
- *     dropped, and the dictionary still has the table       -> the drop rolled back, keep them
+ *     dropped, and the dictionary no longer has the table   -> the drop committed, remove the
+ * families dropped, and the dictionary still has the table       -> the drop rolled back, keep them
  *     created, and the dictionary has the table             -> the create committed, keep them
  *     created, and the dictionary no longer has the table   -> the create rolled back, remove them
  *

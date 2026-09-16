@@ -265,7 +265,8 @@ static TDB_SHOW_VAR_TYPE tidesdb_status_vars_inner[] = {
     TDB_SHOW_VAR_ENTRY("memtable_is_flushing", &srv_stat_memtable_is_flushing, SHOW_LONGLONG),
     TDB_SHOW_VAR_ENTRY("wal_generation", &srv_stat_wal_generation, SHOW_LONGLONG),
     TDB_SHOW_VAR_ENTRY("flush_bytes_written", &srv_stat_flush_bytes_written, SHOW_LONGLONG),
-    TDB_SHOW_VAR_ENTRY("compaction_bytes_written", &srv_stat_compaction_bytes_written, SHOW_LONGLONG),
+    TDB_SHOW_VAR_ENTRY("compaction_bytes_written", &srv_stat_compaction_bytes_written,
+                       SHOW_LONGLONG),
     TDB_SHOW_VAR_ENTRY("compaction_bytes_read", &srv_stat_compaction_bytes_read, SHOW_LONGLONG),
     TDB_SHOW_VAR_ENTRY("user_bytes_written", &srv_stat_user_bytes_written, SHOW_LONGLONG),
     TDB_SHOW_VAR_ENTRY("flush_count", &srv_stat_flush_count, SHOW_LONGLONG),
@@ -279,7 +280,8 @@ static TDB_SHOW_VAR_TYPE tidesdb_status_vars_inner[] = {
     TDB_SHOW_VAR_ENTRY("writes_throttled", &srv_stat_writes_throttled, SHOW_LONGLONG),
     TDB_SHOW_VAR_ENTRY("writes_blocked", &srv_stat_writes_blocked, SHOW_LONGLONG),
     TDB_SHOW_VAR_ENTRY("write_stall_us", &srv_stat_write_stall_us, SHOW_LONGLONG),
-    TDB_SHOW_VAR_ENTRY("write_stall_ceiling_hits", &srv_stat_write_stall_ceiling_hits, SHOW_LONGLONG),
+    TDB_SHOW_VAR_ENTRY("write_stall_ceiling_hits", &srv_stat_write_stall_ceiling_hits,
+                       SHOW_LONGLONG),
     TDB_SHOW_VAR_ENTRY("io_sstable_write_ops", &srv_stat_io_sstable_write_ops, SHOW_LONGLONG),
     TDB_SHOW_VAR_ENTRY("io_sstable_write_bytes", &srv_stat_io_sstable_write_bytes, SHOW_LONGLONG),
     TDB_SHOW_VAR_ENTRY("io_wal_write_ops", &srv_stat_io_wal_write_ops, SHOW_LONGLONG),
@@ -291,8 +293,10 @@ static TDB_SHOW_VAR_TYPE tidesdb_status_vars_inner[] = {
     TDB_SHOW_VAR_ENTRY("stall_manifest_commit", &srv_stat_stall_manifest_commit, SHOW_LONGLONG),
     TDB_SHOW_VAR_ENTRY("klog_logical_bytes", &srv_stat_klog_logical_bytes, SHOW_LONGLONG),
     TDB_SHOW_VAR_ENTRY("klog_stored_bytes", &srv_stat_klog_stored_bytes, SHOW_LONGLONG),
-    TDB_SHOW_VAR_ENTRY("vlog_encoded_logical_bytes", &srv_stat_vlog_encoded_logical_bytes, SHOW_LONGLONG),
-    TDB_SHOW_VAR_ENTRY("vlog_encoded_stored_bytes", &srv_stat_vlog_encoded_stored_bytes, SHOW_LONGLONG),
+    TDB_SHOW_VAR_ENTRY("vlog_encoded_logical_bytes", &srv_stat_vlog_encoded_logical_bytes,
+                       SHOW_LONGLONG),
+    TDB_SHOW_VAR_ENTRY("vlog_encoded_stored_bytes", &srv_stat_vlog_encoded_stored_bytes,
+                       SHOW_LONGLONG),
     TDB_SHOW_VAR_END};
 
 /* SHOW STATUS export: refresh the db-level counters once for this SHOW, then hand back the inner
@@ -312,25 +316,30 @@ TDB_SHOW_VAR_TYPE tidesdb_status_variables[] = {
 /* Refresh the static status variables from live tidesdb stats.  Cost is
    paid by the caller (SHOW ENGINE STATUS / SHOW GLOBAL STATUS), never on
    the write path. */
-static void tidesdb_refresh_status_vars()
+/* whether this caller is the one to run the refresh for the current window.
+ *
+   On-demand refresh coalesced under a short ttl, so the many counters in one SHOW STATUS trigger a
+   single db-stats pass and rapid pollers reuse the snapshot.  The compare-exchange elects one
+   refresher per window, keeping concurrent SHOWs off each other's writes.  This replaces the old
+   per-second background thread -- the counters are current whenever they are observed and cost
+   nothing when no one looks. */
+static bool status_refresh_window_claimed()
 {
-    if (!tdb_global) return;
-
-    /* On-demand refresh coalesced under a short ttl, so the many counters in one SHOW STATUS
-       trigger a single db-stats pass and rapid pollers reuse the snapshot.  The compare-exchange
-       elects one refresher per window, keeping concurrent SHOWs off each other's writes.  This
-       replaces the old per-second background thread -- the counters are current whenever they are
-       observed and cost nothing when no one looks. */
     static std::atomic<long long> refresh_last_us{0};
     long long now = (long long)TDB_MICRO_TIME();
     long long last = refresh_last_us.load(std::memory_order_relaxed);
-    /* last == 0 means no refresh has run yet, so the counters are still at their
-       static zero and must be populated regardless of how little time the timer
-       reads since boot.  Only once a window has actually run do we coalesce the
-       rapid follow-up reads of one SHOW under the ttl. */
-    if (last != 0 && now - last <= TIDESDB_STATS_REFRESH_US) return;
-    if (!refresh_last_us.compare_exchange_strong(last, now, std::memory_order_relaxed)) return;
+    /* last == 0 means no refresh has run yet, so the counters are still at their static zero and
+       must be populated regardless of how little time the timer reads since boot.  Only once a
+       window has actually run do we coalesce the rapid follow-up reads of one SHOW under the
+       ttl. */
+    if (last != 0 && now - last <= TIDESDB_STATS_REFRESH_US) return false;
+    return refresh_last_us.compare_exchange_strong(last, now, std::memory_order_relaxed);
+}
 
+/* the database and block-cache counters, which is the one stats pass the window exists to
+   amortise. */
+static void status_refresh_db_and_cache()
+{
     tidesdb_db_stats_t db_st;
     memset(&db_st, 0, sizeof(db_st));
     tidesdb_get_db_stats(tdb_global, &db_st);
@@ -383,10 +392,13 @@ static void tidesdb_refresh_status_vars()
     srv_stat_writes_blocked = (long long)db_st.writes_blocked;
     srv_stat_write_stall_us = (long long)db_st.write_stall_us;
     srv_stat_write_stall_ceiling_hits = (long long)db_st.write_stall_ceiling_hits;
+}
 
-    /* Device-write counters.  A transient TDB_ERR_LOCKED leaves the prior snapshot
-       in place rather than zeroing a live counter, so a failed sample is stale, not
-       wrong. */
+/* per-device write counters and the write stalls split by reason.  a transient TDB_ERR_LOCKED
+   leaves the prior snapshot in place rather than zeroing a live counter, so a failed sample is
+   stale, not wrong. */
+static void status_refresh_io_and_stalls()
+{
     tidesdb_io_stats_t io_st;
     memset(&io_st, 0, sizeof(io_st));
     if (tidesdb_get_io_stats(tdb_global, &io_st) == TDB_SUCCESS)
@@ -397,7 +409,6 @@ static void tidesdb_refresh_status_vars()
         srv_stat_io_wal_write_bytes = (long long)io_st.classes[TDB_IO_WAL].bytes;
     }
 
-    /* Write-stall counts split by reason. */
     tidesdb_stall_stats_t stall_st;
     memset(&stall_st, 0, sizeof(stall_st));
     if (tidesdb_get_stall_stats(tdb_global, &stall_st) == TDB_SUCCESS)
@@ -409,42 +420,54 @@ static void tidesdb_refresh_status_vars()
         srv_stat_stall_manifest_commit =
             (long long)stall_st.reasons[TDB_STALL_MANIFEST_COMMIT].count;
     }
+}
 
-    /* Codec-chain encoding aggregates, summed over every chain for the key log and
-       the value log so a monitor can track the realized compression ratio. */
+/* sum one codec-chain array into its logical and stored byte totals. */
+static void status_sum_encoding(const tidesdb_encoding_stats_t *enc, size_t count,
+                                long long *logical_out, long long *stored_out)
+{
+    uint64_t logical = 0, stored = 0;
+    for (size_t i = 0; i < count; i++)
+    {
+        logical += enc[i].logical_bytes;
+        stored += enc[i].stored_bytes;
+    }
+    *logical_out = (long long)logical;
+    *stored_out = (long long)stored;
+}
+
+/* codec-chain encoding aggregates, summed over every chain for the key log and the value log so a
+   monitor can track the realized compression ratio. */
+static void status_refresh_encoding()
+{
     tidesdb_encoding_stats_t enc[TDB_MAX_ENCODING_CHAINS];
     size_t enc_count = 0;
+
     memset(enc, 0, sizeof(enc));
     if (tidesdb_get_klog_encoding_stats(tdb_global, enc, TDB_MAX_ENCODING_CHAINS, &enc_count) ==
         TDB_SUCCESS)
-    {
-        uint64_t logical = 0, stored = 0;
-        for (size_t i = 0; i < enc_count; i++)
-        {
-            logical += enc[i].logical_bytes;
-            stored += enc[i].stored_bytes;
-        }
-        srv_stat_klog_logical_bytes = (long long)logical;
-        srv_stat_klog_stored_bytes = (long long)stored;
-    }
+        status_sum_encoding(enc, enc_count, &srv_stat_klog_logical_bytes,
+                            &srv_stat_klog_stored_bytes);
 
     enc_count = 0;
     memset(enc, 0, sizeof(enc));
     if (tidesdb_get_vlog_encoding_stats(tdb_global, enc, TDB_MAX_ENCODING_CHAINS, &enc_count) ==
         TDB_SUCCESS)
-    {
-        uint64_t logical = 0, stored = 0;
-        for (size_t i = 0; i < enc_count; i++)
-        {
-            logical += enc[i].logical_bytes;
-            stored += enc[i].stored_bytes;
-        }
-        srv_stat_vlog_encoded_logical_bytes = (long long)logical;
-        srv_stat_vlog_encoded_stored_bytes = (long long)stored;
-    }
+        status_sum_encoding(enc, enc_count, &srv_stat_vlog_encoded_logical_bytes,
+                            &srv_stat_vlog_encoded_stored_bytes);
+}
 
-    /* Tombstone and density figures are computed on demand in their SHOW_FUNC
-       callbacks, keeping this on-demand refresh clear of the per-CF stats pass. */
+static void tidesdb_refresh_status_vars()
+{
+    if (!tdb_global) return;
+    if (!status_refresh_window_claimed()) return;
+
+    status_refresh_db_and_cache();
+    status_refresh_io_and_stalls();
+    status_refresh_encoding();
+
+    /* Tombstone and density figures are computed on demand in their SHOW_FUNC callbacks, keeping
+       this on-demand refresh clear of the per-CF stats pass. */
 }
 
 /* format the database-level sections (identity, memory, storage, background, write amplification)
@@ -680,7 +703,8 @@ static int status_format_encoding_summary(char *buf, size_t sz, int pos, const c
     return pos;
 }
 
-bool tidesdb_show_status(handlerton *hton [[maybe_unused]], THD *thd, stat_print_fn *print, enum ha_stat_type stat)
+bool tidesdb_show_status(handlerton *hton [[maybe_unused]], THD *thd, stat_print_fn *print,
+                         enum ha_stat_type stat)
 {
     if (stat != HA_ENGINE_STATUS) return false;
     if (!tdb_global) return false;

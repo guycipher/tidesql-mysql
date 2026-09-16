@@ -181,8 +181,7 @@ static bool tdb_ddl_record(THD *thd, const char *path, ddl_log::intent what)
     if (!ddl_log::encode_record(rec, value)) return false;
 
     uint8_t key[ddl_log::KEY_LEN];
-    const size_t key_len =
-        ddl_log::encode_key(tdb_ddl_boot_id, tdb_ddl_sequence.fetch_add(1), key);
+    const size_t key_len = ddl_log::encode_key(tdb_ddl_boot_id, tdb_ddl_sequence.fetch_add(1), key);
 
     return tdb_ddl_write(key, key_len, value);
 }
@@ -390,7 +389,8 @@ void tdb_ddl_register_hooks(handlerton *hton)
     if (!hton) return;
 
     /* Identify this server run.  Any record carrying a different value was written by a run that
-       has ended, which is what lets the recovery pass resolve it without racing a live statement. */
+       has ended, which is what lets the recovery pass resolve it without racing a live statement.
+     */
     tdb_ddl_boot_id = (uint64_t)my_micro_time();
 
     hton->post_ddl = tdb_ddl_post_ddl;

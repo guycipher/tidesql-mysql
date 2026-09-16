@@ -1,0 +1,106 @@
+--source include/rpl/init_source_replica.inc
+#
+# A replica killed outright, then brought back.
+#
+# The manual states that a replica applies its relay log through the same
+# two-phase commit path as any other write, and that after a hard stop the
+# engine's prepared-but-undecided transactions are recovered at startup and
+# resolved, so the replica resumes at a consistent position rather than with a
+# half-applied transaction.  Nothing tested that, which is the same shape as the
+# two replication bugs this suite has already caught: a documented guarantee
+# with no test behind it.
+#
+# What this covers is the recover-and-resume half: the replica is killed with no
+# clean shutdown, so its engine goes through crash recovery on restart, and the
+# source keeps writing while it is down so the replica has to catch up from the
+# right position afterwards.  Landing the kill inside the apply of one specific
+# transaction needs a debug sync point and a debug build, so that part is not
+# claimed here.
+#
+
+--connection master
+CREATE TABLE rc (id INT PRIMARY KEY, v INT, s VARCHAR(32)) ENGINE=TidesDB;
+INSERT INTO rc VALUES (1, 10, 'a'), (2, 20, 'b'), (3, 30, 'c');
+
+--echo #
+--echo # 1. A batch the replica has applied before it dies
+--echo #
+BEGIN;
+--disable_query_log
+let $i = 1;
+while ($i <= 150)
+{
+  eval INSERT INTO rc VALUES (100 + $i, $i, CONCAT('r', $i));
+  inc $i;
+}
+--enable_query_log
+UPDATE rc SET v = v + 1 WHERE id BETWEEN 101 AND 150;
+COMMIT;
+--source include/rpl/sync_to_replica.inc
+
+--connection slave
+--echo # replica has the batch before the kill
+SELECT COUNT(*) AS rows_before_kill FROM rc;
+
+--echo #
+--echo # 2. Kill the replica outright -- no clean shutdown, so the engine has to
+--echo #    recover rather than reopen a cleanly closed store
+--echo #
+--let $rpl_server_number= 2
+--let $rpl_force_stop= 1
+--source include/rpl/stop_server.inc
+
+--echo #
+--echo # 3. The source keeps writing while the replica is down
+--echo #
+--connection master
+INSERT INTO rc VALUES (9001, 1, 'after-crash-1');
+UPDATE rc SET s = 'changed' WHERE id = 1;
+DELETE FROM rc WHERE id = 3;
+BEGIN;
+--disable_query_log
+let $i = 1;
+while ($i <= 150)
+{
+  eval INSERT INTO rc VALUES (9100 + $i, $i, CONCAT('p', $i));
+  inc $i;
+}
+--enable_query_log
+COMMIT;
+
+--echo #
+--echo # 4. It catches up from the right position, losing and duplicating nothing
+--echo #
+--let $rpl_server_number= 2
+--source include/rpl/start_server.inc
+
+--echo # sync_to_replica drives from the source, so ask from there
+--connection master
+--source include/rpl/sync_to_replica.inc
+
+--connection slave
+SELECT COUNT(*) AS rows_after_catchup FROM rc;
+SELECT id, v, s FROM rc WHERE id IN (1, 2, 3, 9001) ORDER BY id;
+--echo # and a range read over the rows written while it was down
+SELECT COUNT(*) AS by_range FROM rc WHERE id BETWEEN 9101 AND 9250;
+
+--echo #
+--echo # 5. Source and replica are byte for byte identical
+--echo #
+--connection master
+--let $mc= `CHECKSUM TABLE rc EXTENDED`
+--connection slave
+--let $sc= `CHECKSUM TABLE rc EXTENDED`
+if ($mc == $sc)
+{
+  --echo # extended checksums match on source and replica
+}
+if ($mc != $sc)
+{
+  --echo MISMATCH source=$mc replica=$sc
+}
+
+--connection master
+DROP TABLE rc;
+--source include/rpl/sync_to_replica.inc
+--source include/rpl/deinit.inc

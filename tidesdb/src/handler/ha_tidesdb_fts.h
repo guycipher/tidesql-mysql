@@ -151,14 +151,12 @@ void fts_deinit();
  * tdb_fts_blend_chars_update
  * sysvar update callback that rebuilds the blend-character lookup after tidesdb_fts_blend_chars set
  */
-void tdb_fts_blend_chars_update(MYSQL_THD thd, TDB_SYS_VAR *var, void *var_ptr,
-                                const void *save);
+void tdb_fts_blend_chars_update(MYSQL_THD thd, TDB_SYS_VAR *var, void *var_ptr, const void *save);
 
 /**
  * tdb_ft_stopword_table_update
  * sysvar update callback that reloads the stop-word set after tidesdb_ft_stopword_table is set
  */
-void tdb_ft_stopword_table_update(MYSQL_THD thd, TDB_SYS_VAR *var, void *var_ptr,
-                                  const void *save);
+void tdb_ft_stopword_table_update(MYSQL_THD thd, TDB_SYS_VAR *var, void *var_ptr, const void *save);
 
 #endif /* HA_TIDESDB_FTS_H */

@@ -274,7 +274,8 @@ static uint32_t tdb_master_generation_resolve()
     std::string stored;
     if (tdb_store_get(key, key_len, stored) && stored.size() == keyenc::FIELD_LEN)
     {
-        tdb_master_generation = keyenc::be32_decode(reinterpret_cast<const uint8_t *>(stored.data()));
+        tdb_master_generation =
+            keyenc::be32_decode(reinterpret_cast<const uint8_t *>(stored.data()));
         return tdb_master_generation;
     }
 
@@ -311,10 +312,9 @@ static bool tdb_table_key_unwrap(const std::string &stored, std::vector<unsigned
     if (!tdb_master_key_get(generation, false, master)) return false;
 
     out.assign(wrapped_len + MY_AES_BLOCK_SIZE, 0);
-    const int len = my_aes_decrypt(reinterpret_cast<const unsigned char *>(stored.data()) +
-                                       wrapped_off,
-                                   (uint32)wrapped_len, out.data(), master.data(),
-                                   (uint32)master.size(), TDB_WRAP_CIPHER, nullptr, false);
+    const int len = my_aes_decrypt(
+        reinterpret_cast<const unsigned char *>(stored.data()) + wrapped_off, (uint32)wrapped_len,
+        out.data(), master.data(), (uint32)master.size(), TDB_WRAP_CIPHER, nullptr, false);
     if (len <= TDB_AES_FAILED)
     {
         out.clear();
@@ -342,9 +342,9 @@ static bool tdb_table_key_wrap(const std::vector<unsigned char> &plain, uint32_t
     if (!tdb_master_key_get(generation, true, master)) return false;
 
     std::vector<unsigned char> wrapped(plain.size() + MY_AES_BLOCK_SIZE, 0);
-    const int len = my_aes_encrypt(plain.data(), (uint32)plain.size(), wrapped.data(),
-                                   master.data(), (uint32)master.size(), TDB_WRAP_CIPHER, nullptr,
-                                   false);
+    const int len =
+        my_aes_encrypt(plain.data(), (uint32)plain.size(), wrapped.data(), master.data(),
+                       (uint32)master.size(), TDB_WRAP_CIPHER, nullptr, false);
     if (len <= TDB_AES_FAILED) return false;
 
     std::vector<uint8_t> framed(keyenc::WRAP_HEADER_LEN + (size_t)len, 0);
@@ -372,8 +372,7 @@ static unsigned int tdb_table_key_mint(unsigned int key_id)
         return TDB_CRYPTO_KEY_VERSION_INVALID;
 
     std::string wrapped;
-    if (!tdb_table_key_wrap(table_key, generation, wrapped))
-        return TDB_CRYPTO_KEY_VERSION_INVALID;
+    if (!tdb_table_key_wrap(table_key, generation, wrapped)) return TDB_CRYPTO_KEY_VERSION_INVALID;
 
     uint8_t wrapped_key[keyenc::KEY_MAX_LEN];
     const size_t wrapped_key_len =
@@ -656,7 +655,8 @@ int tdb_crypto_rotate_master_key()
     }
 
     /* publish the new generation last.  a crash before this point leaves every table key readable
-       under the old master key, which is still in the keyring, so the rotation is simply retried. */
+       under the old master key, which is still in the keyring, so the rotation is simply retried.
+     */
     uint8_t master_key[keyenc::KEY_MAX_LEN];
     const size_t master_key_len = keyenc::encode_master_seq_key(master_key);
     uint8_t value[keyenc::FIELD_LEN];

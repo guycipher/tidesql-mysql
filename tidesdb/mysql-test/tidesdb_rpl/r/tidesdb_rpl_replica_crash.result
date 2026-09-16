@@ -1,0 +1,56 @@
+include/rpl/init_source_replica.inc
+Warnings:
+Note	####	Sending passwords in plain text without SSL/TLS is extremely insecure.
+Note	####	Storing MySQL user name or password information in the connection metadata repository is not secure and is therefore not recommended. Please consider using the USER and PASSWORD connection options for START REPLICA; see the 'START REPLICA Syntax' in the MySQL Manual for more information.
+[connection master]
+CREATE TABLE rc (id INT PRIMARY KEY, v INT, s VARCHAR(32)) ENGINE=TidesDB;
+INSERT INTO rc VALUES (1, 10, 'a'), (2, 20, 'b'), (3, 30, 'c');
+#
+# 1. A batch the replica has applied before it dies
+#
+BEGIN;
+UPDATE rc SET v = v + 1 WHERE id BETWEEN 101 AND 150;
+COMMIT;
+include/rpl/sync_to_replica.inc
+# replica has the batch before the kill
+SELECT COUNT(*) AS rows_before_kill FROM rc;
+rows_before_kill
+153
+#
+# 2. Kill the replica outright -- no clean shutdown, so the engine has to
+#    recover rather than reopen a cleanly closed store
+#
+include/rpl/stop_server.inc [server_number=2]
+#
+# 3. The source keeps writing while the replica is down
+#
+INSERT INTO rc VALUES (9001, 1, 'after-crash-1');
+UPDATE rc SET s = 'changed' WHERE id = 1;
+DELETE FROM rc WHERE id = 3;
+BEGIN;
+COMMIT;
+#
+# 4. It catches up from the right position, losing and duplicating nothing
+#
+include/rpl/start_server.inc [server_number=2]
+# sync_to_replica drives from the source, so ask from there
+include/rpl/sync_to_replica.inc
+SELECT COUNT(*) AS rows_after_catchup FROM rc;
+rows_after_catchup
+303
+SELECT id, v, s FROM rc WHERE id IN (1, 2, 3, 9001) ORDER BY id;
+id	v	s
+1	10	changed
+2	20	b
+9001	1	after-crash-1
+# and a range read over the rows written while it was down
+SELECT COUNT(*) AS by_range FROM rc WHERE id BETWEEN 9101 AND 9250;
+by_range
+150
+#
+# 5. Source and replica are byte for byte identical
+#
+# extended checksums match on source and replica
+DROP TABLE rc;
+include/rpl/sync_to_replica.inc
+include/rpl/deinit.inc

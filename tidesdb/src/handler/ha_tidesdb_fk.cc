@@ -291,14 +291,15 @@ int ha_tidesdb::fk_persist_defs(const char *path, TABLE *table_arg, HA_CREATE_IN
         }
 
         /* A statement that named no schema means the child's own. */
-        e.ref_db = !spec.ref_db.empty()
-                       ? spec.ref_db
-                       : (table_arg->s->db.str
-                              ? std::string(table_arg->s->db.str, table_arg->s->db.length)
-                              : std::string());
+        e.ref_db =
+            !spec.ref_db.empty()
+                ? spec.ref_db
+                : (table_arg->s->db.str ? std::string(table_arg->s->db.str, table_arg->s->db.length)
+                                        : std::string());
 
         /* Record whether each referencing column is nullable so the parent side can rebuild the
-           child index prefix, whose encoding carries a null indicator only for a nullable column. */
+           child index prefix, whose encoding carries a null indicator only for a nullable column.
+         */
         for (const auto &c : e.child_columns)
         {
             const int fi = fk_field_index(table_arg, c);
@@ -533,7 +534,6 @@ void ha_tidesdb::fk_load()
     tidesdb_txn_free(txn);
 }
 
-
 /* Describe one constraint for the server.  The referencing (foreign) table and
    the referenced table swap roles depending on which side is asking, since the
    same constraint is reported from the child by get_foreign_key_list and from
@@ -725,6 +725,83 @@ static TABLE *fk_find_open_table(TABLE *self, const std::string &db, const std::
     return NULL;
 }
 
+/* walk the child index for every row referencing the parent value now in the child's record[0],
+   recording each one's position.  the positions are taken first and acted on afterwards so a
+   delete or update cannot disturb the walk mid-scan.
+   @return 0, or a handler error that is neither end-of-file nor key-not-found */
+int ha_tidesdb::fk_collect_child_refs(TABLE *ct, int cidx, uint nparts, const uchar *keybuf,
+                                      uint key_len, std::vector<std::string> &refs)
+{
+    int rc = ct->file->ha_index_init((uint)cidx, true);
+    if (rc == 0)
+    {
+        rc = ct->file->ha_index_read_map(ct->record[0], keybuf, make_prev_keypart_map(nparts),
+                                         HA_READ_KEY_EXACT);
+        while (rc == 0)
+        {
+            ct->file->position(ct->record[0]);
+            refs.emplace_back((const char *)ct->file->ref, ct->file->ref_length);
+            rc = ct->file->ha_index_next_same(ct->record[0], keybuf, key_len);
+        }
+        ct->file->ha_index_end();
+    }
+    if (rc == HA_ERR_END_OF_FILE || rc == HA_ERR_KEY_NOT_FOUND) return 0;
+    return rc;
+}
+
+/* apply the constraint's referential action to each collected child row -- remove it for
+   ON DELETE CASCADE, otherwise rewrite its key columns to null or to the parent's new values.
+   @return 0, or the first handler error, which stops the cascade */
+int ha_tidesdb::fk_apply_cascade(const tdb_fk_def &d, TABLE *ct, KEY *ckey, uint nparts,
+                                 const uchar *new_row, bool is_update, bool set_null,
+                                 std::vector<std::string> &refs)
+{
+    int result = 0;
+    /* Suppress the child's parent-existence check while we rewrite its rows, and
+       restore it after.  The cascade only ever writes a valid parent value. */
+    ha_tidesdb *child_ha = (ct->file->ht == ht) ? static_cast<ha_tidesdb *>(ct->file) : NULL;
+    if (child_ha) child_ha->fk_in_cascade_ = true;
+    if (!refs.empty() && ct->file->ha_rnd_init(false) == 0)
+    {
+        my_ptrdiff_t npd = is_update ? (my_ptrdiff_t)(new_row - table->record[0]) : 0;
+        for (auto &r : refs)
+        {
+            if (ct->file->ha_rnd_pos(ct->record[0], (uchar *)r.data()) != 0) continue;
+
+            if (!is_update && !set_null)
+            {
+                /* ON DELETE CASCADE removes the child, which recurses through the
+                   child handler into its own foreign keys and indexes. */
+                result = TDB_CASCADE_DELETE_ROW(child_ha, ct->file, ct->record[0]);
+            }
+            else
+            {
+                store_record(ct, record[1]);
+                for (uint i = 0; i < nparts; i++)
+                {
+                    Field *cf = ckey->key_part[i].field;
+                    if (set_null)
+                        cf->set_null();
+                    else
+                    {
+                        Field *pf = table->field[d.parent_fields[i]];
+                        pf->move_field_offset(npd);
+                        cf->set_notnull();
+                        TDB_FIELD_CONV(cf, pf);
+                        pf->move_field_offset(-npd);
+                    }
+                }
+                result = TDB_CASCADE_UPDATE_ROW(child_ha, ct->file, ct->record[1], ct->record[0]);
+            }
+            if (result) break;
+        }
+        ct->file->ha_rnd_end();
+    }
+    if (child_ha) child_ha->fk_in_cascade_ = false;
+
+    return result;
+}
+
 int ha_tidesdb::fk_cascade_children(const tdb_fk_def &d, const uchar *old_row, const uchar *new_row)
 {
     const bool is_update = (new_row != NULL);
@@ -791,23 +868,12 @@ int ha_tidesdb::fk_cascade_children(const tdb_fk_def &d, const uchar *old_row, c
     uchar keybuf[MAX_KEY_LENGTH];
     key_copy(keybuf, ct->record[0], ckey, key_len);
 
-    /* Collect the referencing children's positions first, then act on them, so a
-       delete or update does not disturb the index walk mid-scan. */
+    /* Collect the referencing children's positions first, then act on them, so a delete or update
+       does not disturb the index walk mid-scan. */
     std::vector<std::string> refs;
-    int rc = ct->file->ha_index_init((uint)cidx, true);
-    if (rc == 0)
-    {
-        rc = ct->file->ha_index_read_map(ct->record[0], keybuf, make_prev_keypart_map(nparts),
-                                         HA_READ_KEY_EXACT);
-        while (rc == 0)
-        {
-            ct->file->position(ct->record[0]);
-            refs.emplace_back((const char *)ct->file->ref, ct->file->ref_length);
-            rc = ct->file->ha_index_next_same(ct->record[0], keybuf, key_len);
-        }
-        ct->file->ha_index_end();
-    }
-    if (rc != 0 && rc != HA_ERR_END_OF_FILE && rc != HA_ERR_KEY_NOT_FOUND)
+
+    int rc = fk_collect_child_refs(ct, cidx, nparts, keybuf, key_len, refs);
+    if (rc != 0)
     {
         TDB_RESTORE_COLUMN_MAP(ct, read_set, old_r);
         TDB_RESTORE_COLUMN_MAP(ct, write_set, old_w);
@@ -815,48 +881,7 @@ int ha_tidesdb::fk_cascade_children(const tdb_fk_def &d, const uchar *old_row, c
     }
 
     int result = 0;
-    /* Suppress the child's parent-existence check while we rewrite its rows, and
-       restore it after.  The cascade only ever writes a valid parent value. */
-    ha_tidesdb *child_ha = (ct->file->ht == ht) ? static_cast<ha_tidesdb *>(ct->file) : NULL;
-    if (child_ha) child_ha->fk_in_cascade_ = true;
-    if (!refs.empty() && ct->file->ha_rnd_init(false) == 0)
-    {
-        my_ptrdiff_t npd = is_update ? (my_ptrdiff_t)(new_row - table->record[0]) : 0;
-        for (auto &r : refs)
-        {
-            if (ct->file->ha_rnd_pos(ct->record[0], (uchar *)r.data()) != 0) continue;
-
-            if (!is_update && !set_null)
-            {
-                /* ON DELETE CASCADE removes the child, which recurses through the
-                   child handler into its own foreign keys and indexes. */
-                result = TDB_CASCADE_DELETE_ROW(child_ha, ct->file, ct->record[0]);
-            }
-            else
-            {
-                store_record(ct, record[1]);
-                for (uint i = 0; i < nparts; i++)
-                {
-                    Field *cf = ckey->key_part[i].field;
-                    if (set_null)
-                        cf->set_null();
-                    else
-                    {
-                        Field *pf = table->field[d.parent_fields[i]];
-                        pf->move_field_offset(npd);
-                        cf->set_notnull();
-                        TDB_FIELD_CONV(cf, pf);
-                        pf->move_field_offset(-npd);
-                    }
-                }
-                result =
-                    TDB_CASCADE_UPDATE_ROW(child_ha, ct->file, ct->record[1], ct->record[0]);
-            }
-            if (result) break;
-        }
-        ct->file->ha_rnd_end();
-    }
-    if (child_ha) child_ha->fk_in_cascade_ = false;
+    result = fk_apply_cascade(d, ct, ckey, nparts, new_row, is_update, set_null, refs);
 
     TDB_RESTORE_COLUMN_MAP(ct, read_set, old_r);
     TDB_RESTORE_COLUMN_MAP(ct, write_set, old_w);

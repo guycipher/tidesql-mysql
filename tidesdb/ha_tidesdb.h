@@ -837,15 +837,14 @@ class ha_tidesdb : public handler
        statistics interval.  This is the part of a scan's cost that volume alone cannot see. */
     double scan_overlap();
 
-
     /* Convert a server table path to a TidesDB column family name */
     static std::string path_to_cf_name(const char *path);
 
     /* DDL */
     int open(const char *name, int mode, uint test_if_locked TDB_DD_OPEN_ARG) override;
     int close(void) override;
-    int create(const char *name, TABLE *form, HA_CREATE_INFO *create_info TDB_DD_CREATE_ARG)
-        override;
+    int create(const char *name, TABLE *form,
+               HA_CREATE_INFO *create_info TDB_DD_CREATE_ARG) override;
     int delete_table(const char *name TDB_DD_DELETE_ARG) override;
     int rename_table(const char *from, const char *to TDB_DD_RENAME_ARG) override;
 
@@ -924,6 +923,11 @@ class ha_tidesdb : public handler
        the children's secondary indexes and their own nested foreign keys stay
        correct.  new_row is the parent's new image for an update cascade and NULL
        for a delete.  Returns 0 or a handler error to surface. */
+    int fk_collect_child_refs(TABLE *ct, int cidx, uint nparts, const uchar *keybuf, uint key_len,
+                              std::vector<std::string> &refs);
+    int fk_apply_cascade(const tdb_fk_def &d, TABLE *ct, KEY *ckey, uint nparts,
+                         const uchar *new_row, bool is_update, bool set_null,
+                         std::vector<std::string> &refs);
     int fk_cascade_children(const tdb_fk_def &d, const uchar *old_row, const uchar *new_row);
     /* Set on a child handler while a parent cascade drives its rows, so the
        child's own parent-existence check is skipped for the value the cascade is
@@ -1077,8 +1081,9 @@ class ha_tidesdb : public handler
     THR_LOCK_DATA **store_lock(THD *thd, THR_LOCK_DATA **to, enum thr_lock_type lock_type) override;
 
     /* Online DDL -- instant metadata, inplace indexes, copy for columns */
-    enum_alter_inplace_result check_if_supported_inplace_alter(
-        TABLE *altered_table, Alter_inplace_info *ha_alter_info) override;
+    enum_alter_inplace_result
+    check_if_supported_inplace_alter(TABLE *altered_table,
+                                     Alter_inplace_info *ha_alter_info) override;
     bool prepare_inplace_alter_table(TABLE *altered_table,
                                      Alter_inplace_info *ha_alter_info TDB_DD_ALTER_ARG) override;
     bool inplace_alter_table(TABLE *altered_table,
@@ -1105,7 +1110,8 @@ class ha_tidesdb : public handler
        (the helper has freed the cursor, restored old_map, and raised the error), false on success.
      */
     bool inplace_scan_and_build(ha_tidesdb_inplace_ctx *ctx, TABLE *altered_table,
-                                tidesdb_txn_t *&txn, tidesdb_iter_t *&iter, TDB_COLUMN_MAP_SAVED old_map);
+                                tidesdb_txn_t *&txn, tidesdb_iter_t *&iter,
+                                TDB_COLUMN_MAP_SAVED old_map);
     /* release an aborting index build's cursor and transaction and restore the column map; the
        caller raises the specific error first.  always returns true for `return
        inplace_abort_build`. */

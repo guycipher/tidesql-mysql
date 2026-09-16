@@ -76,6 +76,23 @@ reproduce that key's null indicator. Everything else behaves as in InnoDB. See
 inplace primary-key change, and changing a column type such as `INT` to `BIGINT` also rebuilds the
 table by copy. See [Online DDL](/administration/online-ddl).
 
+**A very large INSERT or DELETE commits in pieces.** A statement touching more rows than the
+engine's batch threshold commits its work to storage part-way through rather than holding the whole
+statement in one transaction, which is what keeps a multi-million-row load from growing the
+transaction without bound. Two consequences follow, and both are about the boundary rather than the
+result:
+
+- The statement is not atomic against a crash. A server that dies in the middle of one leaves the
+  batches that had already committed, not an all-or-nothing outcome.
+- With binary logging on, the row events for the statement are written to the binlog cache and
+  flushed when the statement commits, while the engine has already made earlier batches durable. A
+  crash in that window leaves the engine holding rows the binlog never recorded, so a replica built
+  from that binlog, or a point-in-time recovery through it, is missing them.
+
+`UPDATE` is not affected: it is applied one row at a time through the path the server logs from, so
+it commits once at the end. Where a large write has to be atomic and replicated exactly, split it
+into transactions you control rather than relying on one statement.
+
 **Statistics are cached for up to two seconds.** Right after a bulk load the optimizer may briefly
 see stale row counts. `ANALYZE TABLE` forces an immediate refresh.
 

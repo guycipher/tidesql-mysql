@@ -48,8 +48,9 @@
   INPLACE     add/drop secondary indexes (create/drop CFs, populate)
   COPY        column type changes, PK changes
 */
-enum_alter_inplace_result ha_tidesdb::check_if_supported_inplace_alter(
-    TABLE *altered_table [[maybe_unused]], Alter_inplace_info *ha_alter_info)
+enum_alter_inplace_result
+ha_tidesdb::check_if_supported_inplace_alter(TABLE *altered_table [[maybe_unused]],
+                                             Alter_inplace_info *ha_alter_info)
 {
     DBUG_ENTER("ha_tidesdb::check_if_supported_inplace_alter");
 
@@ -308,10 +309,9 @@ int ha_tidesdb::inplace_add_row_entries(ha_tidesdb_inplace_ctx *ctx, TABLE *alte
             /* A per-row put failure leaves a hole in the new index, which
                commit_inplace_alter_table would then ship as a silently
                incomplete index.  Abort the ALTER instead. */
-            sql_print_error(
-                "[TIDESDB] inplace ADD INDEX: put failed for key %u (err=%d), "
-                "aborting to avoid a partial index",
-                key_num, rc);
+            sql_print_error("[TIDESDB] inplace ADD INDEX: put failed for key %u (err=%d), "
+                            "aborting to avoid a partial index",
+                            key_num, rc);
             fail_key_num = key_num;
             return 2;
         }
@@ -327,10 +327,9 @@ int ha_tidesdb::inplace_batch_commit_reseek(tidesdb_txn_t *&txn, tidesdb_iter_t 
     {
         /* A failed batch commit drops this batch of index entries.  Carrying
            on would report success with an index silently missing rows. */
-        sql_print_error(
-            "[TIDESDB] inplace ADD INDEX: batch commit failed rc=%d, "
-            "aborting to avoid a partial index",
-            crc);
+        sql_print_error("[TIDESDB] inplace ADD INDEX: batch commit failed rc=%d, "
+                        "aborting to avoid a partial index",
+                        crc);
         return 1; /* iter and txn still live -- caller frees both */
     }
     tidesdb_iter_free(iter);
@@ -341,10 +340,9 @@ int ha_tidesdb::inplace_batch_commit_reseek(tidesdb_txn_t *&txn, tidesdb_iter_t 
     int rrc = tidesdb_txn_reset(txn, TDB_ISOLATION_READ_COMMITTED);
     if (rrc != TDB_SUCCESS)
     {
-        sql_print_warning(
-            "[TIDESDB] inplace ADD INDEX: tidesdb_txn_reset failed (rc=%d), "
-            "falling back to free+begin",
-            rrc);
+        sql_print_warning("[TIDESDB] inplace ADD INDEX: tidesdb_txn_reset failed (rc=%d), "
+                          "falling back to free+begin",
+                          rrc);
         tidesdb_txn_free(txn);
         txn = NULL;
         int bec = tidesdb_txn_begin_with_isolation(tdb_global, TDB_ISOLATION_READ_COMMITTED, &txn);
@@ -495,7 +493,8 @@ bool ha_tidesdb::inplace_scan_and_build(ha_tidesdb_inplace_ctx *ctx, TABLE *alte
         if (prc != 0)
         {
             if (prc == 1)
-                my_error(ER_DUP_ENTRY, MYF(0), "?", TDB_KEY_NAME(&altered_table->key_info[fail_key_num]));
+                my_error(ER_DUP_ENTRY, MYF(0), "?",
+                         TDB_KEY_NAME(&altered_table->key_info[fail_key_num]));
             else
                 my_error(ER_INTERNAL_ERROR, MYF(0),
                          "[TIDESDB] per-row put failed during index build");
@@ -681,10 +680,9 @@ void ha_tidesdb::commit_apply_runtime_config(TABLE *altered_table [[maybe_unused
     {
         int rc = tidesdb_cf_update_runtime_config(tdb_global, share->cf, &data_cfg, 1);
         if (rc != TDB_SUCCESS)
-            sql_print_warning(
-                "[TIDESDB] ALTER: failed to update runtime config for "
-                "data CF '%s' (err=%d)",
-                share->cf_name.c_str(), rc);
+            sql_print_warning("[TIDESDB] ALTER: failed to update runtime config for "
+                              "data CF '%s' (err=%d)",
+                              share->cf_name.c_str(), rc);
     }
 
     for (uint i = 0; i < share->idx_cfs.size(); i++)
@@ -695,10 +693,9 @@ void ha_tidesdb::commit_apply_runtime_config(TABLE *altered_table [[maybe_unused
 
             int rc = tidesdb_cf_update_runtime_config(tdb_global, share->idx_cfs[i], &idx_cfg, 1);
             if (rc != TDB_SUCCESS)
-                sql_print_warning(
-                    "[TIDESDB] ALTER: failed to update runtime config for "
-                    "index CF '%s' (err=%d)",
-                    share->idx_cf_names[i].c_str(), rc);
+                sql_print_warning("[TIDESDB] ALTER: failed to update runtime config for "
+                                  "index CF '%s' (err=%d)",
+                                  share->idx_cf_names[i].c_str(), rc);
         }
     }
 
@@ -724,7 +721,8 @@ void ha_tidesdb::commit_apply_runtime_config(TABLE *altered_table [[maybe_unused
   For TidesDB, changing options like COMPRESSION, TTL, etc. is always
   compatible -- the .frm is rewritten and re-read on next open().
 */
-bool ha_tidesdb::check_if_incompatible_data(HA_CREATE_INFO *create_info [[maybe_unused]], uint table_changes)
+bool ha_tidesdb::check_if_incompatible_data(HA_CREATE_INFO *create_info [[maybe_unused]],
+                                            uint table_changes)
 {
     /* If only table options changed (not column types), data is compatible */
     if (table_changes == IS_EQUAL_YES) return COMPATIBLE_DATA_YES;

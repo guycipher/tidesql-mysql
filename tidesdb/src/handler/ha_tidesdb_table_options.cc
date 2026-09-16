@@ -109,13 +109,13 @@ bool tdb_field_is_ttl_source(const void *dd_table_def, const TABLE *tbl, uint fi
         if (!col || my_strcasecmp(system_charset_info, col->name().c_str(), field->field_name) != 0)
             continue;
 
-        const dd::String_type attr(col->engine_attribute().str,
-                                   col->engine_attribute().str ? col->engine_attribute().length
-                                                               : 0);
+        const dd::String_type attr(col->engine_attribute().str, col->engine_attribute().str
+                                                                    ? col->engine_attribute().length
+                                                                    : 0);
         bool is_ttl = false;
         std::string error;
         if (!tidesdb::table_options::parse_column_attributes(attr.data(), attr.size(), &is_ttl,
-                                                            &error))
+                                                             &error))
         {
             sql_print_warning("[TIDESDB] column '%s' has an attribute this build cannot read (%s); "
                               "it is not treated as the row expiry source",
@@ -187,10 +187,9 @@ bool tdb_table_options_load(tidesdb_column_family_t *cf, ha_table_option_struct 
     uint8_t *val = NULL;
     size_t vlen = 0;
     tdb_owned_buf vg(val);
-    const bool found =
-        tidesdb_txn_get(txn, cf, OPTIONS_META_KEY, OPTIONS_META_KEY_LEN, &val, &vlen) ==
-            TDB_SUCCESS &&
-        val && vlen > 0;
+    const bool found = tidesdb_txn_get(txn, cf, OPTIONS_META_KEY, OPTIONS_META_KEY_LEN, &val,
+                                       &vlen) == TDB_SUCCESS &&
+                       val && vlen > 0;
 
     bool ok = false;
     if (found)
