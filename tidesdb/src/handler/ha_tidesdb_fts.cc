@@ -246,14 +246,6 @@ static void tdb_load_default_stopwords()
     for (const char **w = tdb_default_stopwords; *w; w++) tdb_stopwords.insert(*w);
 }
 
-/* Check if a lowercased token is a stop word.
-   PRECONDITION caller holds tdb_stopword_lock for reading (taken once per
-   fts_tokenize call to avoid N lock pairs per document). */
-static inline bool tdb_is_stopword_locked(const std::string &word)
-{
-    return tdb_stopwords.count(word) > 0;
-}
-
 /* Load stop words from a user table specified as "db_name/table_name".
    Must be called with tdb_stopword_lock held for writing.
    Uses TidesDB's own CF to read the table if it's a TidesDB table,
