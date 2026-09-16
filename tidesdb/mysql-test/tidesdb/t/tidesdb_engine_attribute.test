@@ -87,3 +87,6 @@ COMMIT;
 connection default;
 disconnect con1;
 DROP TABLE t_frozen;
+
+--source ../include/cleanup_tidesdb.inc
+--echo # Done.

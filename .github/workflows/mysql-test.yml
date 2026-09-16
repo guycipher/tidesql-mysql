@@ -213,12 +213,18 @@ jobs:
         run: |
           set -euo pipefail
           # WITH_SSL defaults to system on Windows and the runner ships no OpenSSL laid out the
-          # way the server expects, down to applink.c -- so point it at the vcpkg one.
+          # way the server expects, down to applink.c -- so point it at the vcpkg one by path.
+          #
+          # Deliberately no vcpkg toolchain file here.  The server bundles zstd, lz4, icu and
+          # protobuf and links those; handing it the toolchain puts vcpkg's include directories
+          # ahead of the bundled ones, so mysys compiles against vcpkg's zstd.h -- which declares
+          # the API dllimport -- while still linking the bundled static library, and libmysql
+          # fails with unresolved __imp_ZSTD_* symbols.  Only the TidesDB library build needs
+          # vcpkg, and it gets the toolchain there.
           cmake -S mysql-server -B mysql-server/build -G "Visual Studio 17 2022" -A x64 \
             -DWITH_BOOST="$PWD/mysql-server/extra/boost" \
             -DWITH_UNIT_TESTS=OFF \
-            -DWITH_SSL="$VCPKG_INSTALLATION_ROOT/installed/x64-windows" \
-            -DCMAKE_TOOLCHAIN_FILE="$VCPKG_INSTALLATION_ROOT/scripts/buildsystems/vcpkg.cmake"
+            -DWITH_SSL="$VCPKG_INSTALLATION_ROOT/installed/x64-windows"
           cmake --build mysql-server/build --config RelWithDebInfo --parallel 2>&1 | tee build.log
 
       # The plugin's own CMake returns early with only a STATUS message when it
