@@ -115,6 +115,12 @@ jobs:
           set -euo pipefail
           # The plugin links libtidesdb and its build skips itself entirely when it
           # cannot find it, so this has to succeed before the server is configured.
+          #
+          # TIDESDB_BUILD_TESTS defaults to ON.  Nothing here runs the library's own
+          # tests, and on Windows each test executable carries a vcpkg z-applocal
+          # post-build step that copies its dll dependencies -- which is where this
+          # build was failing.  Turning them off removes the failing step and the
+          # time it costs on every platform.
           if [ ! -d tidesdb-install ]; then
             git clone --depth 1 --branch "${TIDESDB_REF}" \
               https://github.com/tidesdb/tidesdb.git tidesdb-src
@@ -135,14 +141,14 @@ jobs:
             # set -u aborts the step.
             if [ "$RUNNER_OS" = "Windows" ]; then
               cmake -S tidesdb-src -B tidesdb-build -DCMAKE_BUILD_TYPE=Release \
-                -DCMAKE_INSTALL_PREFIX="$PWD/tidesdb-install" \
+                -DCMAKE_INSTALL_PREFIX="$PWD/tidesdb-install" -DTIDESDB_BUILD_TESTS=OFF \
                 -DCMAKE_TOOLCHAIN_FILE="$VCPKG_INSTALLATION_ROOT/scripts/buildsystems/vcpkg.cmake" \
                 -DVCPKG_TARGET_TRIPLET=x64-windows
               cmake --build tidesdb-build --parallel --config Release
               cmake --install tidesdb-build --config Release
             else
               cmake -S tidesdb-src -B tidesdb-build -DCMAKE_BUILD_TYPE=Release \
-                -DCMAKE_INSTALL_PREFIX="$PWD/tidesdb-install"
+                -DCMAKE_INSTALL_PREFIX="$PWD/tidesdb-install" -DTIDESDB_BUILD_TESTS=OFF
               cmake --build tidesdb-build --parallel
               cmake --install tidesdb-build
             fi
@@ -346,7 +352,7 @@ jobs:
             https://github.com/tidesdb/tidesdb.git tidesdb-src
           git -C tidesdb-src rev-parse HEAD
           cmake -S tidesdb-src -B tidesdb-build -DCMAKE_BUILD_TYPE=RelWithDebInfo \
-            -DCMAKE_INSTALL_PREFIX=/usr/local
+            -DCMAKE_INSTALL_PREFIX=/usr/local -DTIDESDB_BUILD_TESTS=OFF
           cmake --build tidesdb-build --parallel
           sudo cmake --install tidesdb-build
           sudo ldconfig
