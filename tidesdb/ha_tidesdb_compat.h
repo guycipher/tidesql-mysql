@@ -607,7 +607,6 @@ typedef std::ptrdiff_t my_ptrdiff_t;
 /* ordered group commit.  MySQL orders commits in the binlog coordinator and publishes no engine
    hook for it, so the engine's handoff is simply not registered there; the plain commit path
    already does the work. */
-#define TDB_HTON_SET_COMMIT_ORDERED(hton, fn) ((void)sizeof(&(fn)))
 
 /* ******************** misc helpers ******************** */
 

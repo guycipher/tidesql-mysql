@@ -339,12 +339,6 @@ struct tidesdb_trx_t
        connection, so the list is moved aside here for the prepared-in-coordinator record to be
        written from. */
     std::vector<std::pair<std::string, std::string>> prepared_mod_tables;
-
-    /* Group-commit handoff.  When the server drives ordered commit, commit_ordered runs the durable
-       commit in binlog order and records here that it did so and with what result, so the following
-       commit() reports the outcome and skips a second commit rather than re-committing. */
-    bool commit_ordered_done{false};
-    int commit_ordered_rc{0};
 };
 
 /* TDB_TABLE_OPTIONS, the per-table CREATE TABLE option accessor, is defined by the compat layer:

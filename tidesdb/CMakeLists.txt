@@ -218,6 +218,15 @@ LIST(APPEND TIDESDB_HANDLER_SOURCES src/handler/ha_tidesdb_fk.cc)
 MYSQL_ADD_PLUGIN(tidesdb ha_tidesdb.cc ${TIDESDB_CORE_SOURCES} ${TIDESDB_HANDLER_SOURCES}
         STORAGE_ENGINE MODULE_ONLY LINK_LIBRARIES ${TIDESDB_LIBS})
 
+# RULES.md documents @param for struct fields as well as for function parameters, and the
+# server-free core headers follow it.  clang's -Wdocumentation only accepts @param on a comment
+# attached to a function declaration, so it flags every struct doc block in those headers.  The
+# convention is deliberate and written down, so the check is turned off for this target rather than
+# several hundred doc comments rewritten to suit one compiler's reading of doxygen.
+IF(TARGET tidesdb AND CMAKE_CXX_COMPILER_ID MATCHES "Clang")
+  TARGET_COMPILE_OPTIONS(tidesdb PRIVATE -Wno-documentation)
+ENDIF()
+
 # The split translation units under src/handler and src/engine reach the root headers
 # (ha_tidesdb.h) and the src/core and src/handler headers by their path-qualified names, so
 # the plugin source directory must be on the include path for every source, not just the ones

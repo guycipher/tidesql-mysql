@@ -408,8 +408,7 @@ static int tidesdb_savepoint_release(TDB_HTON_CB_ARG THD *thd, void *sv)
 }
 
 /* Perform the durable final commit of a real (non statement-level) transaction, leaving the txn
-   object alive and reset-pending for reuse.  Shared by commit() and commit_ordered() so the actual
-   commit happens exactly once whichever path the server drives. */
+   object alive and reset-pending for reuse. */
 static int tdb_finalize_commit(THD *thd, tidesdb_trx_t *trx)
 {
     /* We must release any active statement savepoint before final commit/rollback.
@@ -488,17 +487,6 @@ static int tidesdb_commit(TDB_HTON_CB_ARG THD *thd, bool all)
     tidesdb_trx_t *trx = (tidesdb_trx_t *)thd_get_ha_data(thd, tidesdb_hton);
     if (!trx) return 0;
 
-    /* commit_ordered already ran the durable commit in binlog order.  Report its outcome and skip a
-       second commit.  Checked before the txn-null guard because a failed ordered commit frees txn.
-     */
-    if (trx->commit_ordered_done)
-    {
-        trx->commit_ordered_done = false;
-        int rc = trx->commit_ordered_rc;
-        trx->commit_ordered_rc = 0;
-        return rc;
-    }
-
     if (!trx->txn) return 0;
 
     /* We determine whether this is the final commit for the transaction.
@@ -523,37 +511,10 @@ static int tidesdb_commit(TDB_HTON_CB_ARG THD *thd, bool all)
     return tdb_finalize_commit(thd, trx);
 }
 
-/* Group commit.  The server calls this in the binlog commit order for the whole transaction, ahead
-   of commit(), so we run the durable commit here to land it in that order, stash the outcome, and
-   let the following commit() report it.  The server can then run commit() outside the commit-order
-   lock, which is the throughput win group commit exists for. */
-static void tidesdb_commit_ordered(THD *thd, bool all)
-{
-    tidesdb_trx_t *trx = (tidesdb_trx_t *)thd_get_ha_data(thd, tidesdb_hton);
-    if (!trx || !trx->txn) return;
-
-    /* commit_ordered is only invoked to commit the whole transaction, never at a statement end. */
-    if (!(all || !thd_test_options(thd, OPTION_NOT_AUTOCOMMIT | OPTION_BEGIN))) return;
-
-    trx->commit_ordered_rc = tdb_finalize_commit(thd, trx);
-    trx->commit_ordered_done = true;
-}
-
 static int tidesdb_rollback(TDB_HTON_CB_ARG THD *thd, bool all)
 {
     tidesdb_trx_t *trx = (tidesdb_trx_t *)thd_get_ha_data(thd, tidesdb_hton);
     if (!trx) return 0;
-
-    /* If commit_ordered already committed this transaction in binlog order, the decision was
-       commit, so honor it and clear the handoff rather than rolling back a committed transaction.
-     */
-    if (trx->commit_ordered_done)
-    {
-        trx->commit_ordered_done = false;
-        int rc = trx->commit_ordered_rc;
-        trx->commit_ordered_rc = 0;
-        return rc;
-    }
 
     if (!trx->txn) return 0;
 
@@ -1303,7 +1264,6 @@ void tidesdb_txn_register(handlerton *hton)
 
     /* one TidesDB txn per BEGIN..COMMIT, shared by every handler on the connection */
     hton->commit = tidesdb_commit;
-    TDB_HTON_SET_COMMIT_ORDERED(hton, tidesdb_commit_ordered);
     hton->rollback = tidesdb_rollback;
     hton->close_connection = tidesdb_close_connection;
 

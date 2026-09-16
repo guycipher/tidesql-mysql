@@ -54,7 +54,7 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y \
             build-essential cmake ninja-build git bison ccache pkg-config \
-            libssl-dev libncurses-dev libudev-dev libcurl4-openssl-dev \
+            libssl-dev libncurses-dev libudev-dev libcurl4-openssl-dev libtirpc-dev \
             liblz4-dev libzstd-dev libsnappy-dev
 
       - name: Install dependencies (macOS)
@@ -84,7 +84,7 @@ jobs:
         shell: pwsh
         run: |
           choco install -y winflexbison3 ninja
-          vcpkg install zstd:x64-windows lz4:x64-windows snappy:x64-windows
+          vcpkg install zstd:x64-windows lz4:x64-windows snappy:x64-windows openssl:x64-windows
 
       - name: Configure ccache (Unix)
         if: runner.os != 'Windows'
@@ -212,9 +212,12 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          # WITH_SSL defaults to system on Windows and the runner ships no OpenSSL laid out the
+          # way the server expects, down to applink.c -- so point it at the vcpkg one.
           cmake -S mysql-server -B mysql-server/build -G "Visual Studio 17 2022" -A x64 \
             -DWITH_BOOST="$PWD/mysql-server/extra/boost" \
             -DWITH_UNIT_TESTS=OFF \
+            -DWITH_SSL="$VCPKG_INSTALLATION_ROOT/installed/x64-windows" \
             -DCMAKE_TOOLCHAIN_FILE="$VCPKG_INSTALLATION_ROOT/scripts/buildsystems/vcpkg.cmake"
           cmake --build mysql-server/build --config RelWithDebInfo --parallel 2>&1 | tee build.log
 
@@ -314,7 +317,7 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y \
             build-essential cmake ninja-build git bison ccache pkg-config \
-            libssl-dev libncurses-dev libudev-dev libcurl4-openssl-dev \
+            libssl-dev libncurses-dev libudev-dev libcurl4-openssl-dev libtirpc-dev \
             liblz4-dev libzstd-dev libsnappy-dev
 
       - name: Configure ccache
