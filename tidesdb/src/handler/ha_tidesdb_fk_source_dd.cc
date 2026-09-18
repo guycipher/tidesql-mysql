@@ -33,6 +33,10 @@
 
 #include <cstring>
 
+/* native_strcasecmp -- the server's portable spelling; plain strcasecmp is POSIX-only and MSVC
+   has no such name. */
+#include "m_string.h"
+
 #include "dd/cache/dictionary_client.h"
 #include "dd/dd_table.h"
 #include "dd/types/column.h"
@@ -147,7 +151,7 @@ bool tdb_fk_resolve_parent_index(THD *thd, const std::string &ref_db, const std:
                 break;
             }
             const dd::String_type &cname = el->column().name();
-            if (strcasecmp(cname.c_str(), ref_cols[matched].c_str()) != 0)
+            if (native_strcasecmp(cname.c_str(), ref_cols[matched].c_str()) != 0)
             {
                 match = false;
                 break;

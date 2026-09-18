@@ -76,7 +76,7 @@ uint ha_tidesdb::make_comparable_key(KEY *key_info, const uchar *record, uint nu
             if (field->is_null())
             {
                 out[pos++] = SORT_KEY_NULL;
-                bzero(out + pos, kp->length);
+                memset(out + pos, 0, kp->length);
                 pos += kp->length;
                 field->move_field_offset(-ptrdiff);
                 if (desc) invert_key_part(out + part_start, pos - part_start);
@@ -102,7 +102,7 @@ uint ha_tidesdb::make_comparable_key(KEY *key_info, const uchar *record, uint nu
 
             uint copy_len = MY_MIN(data_len, data_space);
             memcpy(out + pos, buf.ptr(), copy_len);
-            if (copy_len < data_space) bzero(out + pos + copy_len, data_space - copy_len);
+            if (copy_len < data_space) memset(out + pos + copy_len, 0, data_space - copy_len);
             pos += data_space;
 
             /* For values that overflow data_space (value is exactly field_length

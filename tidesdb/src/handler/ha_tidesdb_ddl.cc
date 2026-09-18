@@ -227,7 +227,7 @@ uint ha_tidesdb::inplace_build_index_key(KEY *ki, my_ptrdiff_t ptdiff, uchar *ik
             if (field->is_null())
             {
                 ik[pos++] = SORT_KEY_NULL;
-                bzero(ik + pos, kp->length);
+                memset(ik + pos, 0, kp->length);
                 pos += kp->length;
                 field->move_field_offset(-ptdiff);
                 row_has_null = true;
