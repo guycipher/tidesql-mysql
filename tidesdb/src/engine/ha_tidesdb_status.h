@@ -32,7 +32,7 @@
 bool tidesdb_show_status(handlerton *hton, THD *thd, stat_print_fn *print, enum ha_stat_type stat);
 
 /* the plugin's status-variable array, one SHOW_ARRAY export under the "tidesdb" prefix; registered
-   in the maria_declare_plugin block. */
+   in the mysql_declare_plugin block. */
 extern TDB_SHOW_VAR_TYPE tidesdb_status_variables[];
 
 #endif /* HA_TIDESDB_STATUS_H */

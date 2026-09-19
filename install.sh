@@ -19,19 +19,19 @@
 #   4. Clone MySQL server source
 #        - Checkout the requested branch/tag
 #        - Init submodules
-#        - Copy tidesdb/ storage engine plugin into storage/ (the test suites
-#          under tidesdb/mysql-test/ are discovered from the engine directory)
+#        - Copy tidesdb/ storage engine plugin into storage/, and copy its test
+#          suites into mysql-test/suite/ -- MySQL looks for a suite there, not
+#          under the engine's own directory
 #   5. Build MySQL (full server)
 #        - All default storage engines (InnoDB, MyISAM, MEMORY, CSV, etc.)
 #        - All standard tools (mysql, mysqldump, mysqladmin, etc.)
-#        - mariabackup enabled
 #        - TidesDB plugin built as a MODULE via the copied source
 #        - cmake points at --tidesdb-prefix so FIND_LIBRARY resolves
 #   6. Install MySQL to --mysql-prefix
 #   7. Setup
 #        - Create mysql system user (Unix only)
 #        - Write production my.cnf / my.ini (InnoDB tuning, logging, utf8mb4,
-#          TidesDB plugin_load_add, client/mysqldump/mariabackup sections)
+#          TidesDB plugin_load_add, client and mysqldump sections)
 #        - Run mysql-install-db to initialize the data directory
 #        - Set proper file ownership (Unix only)
 #   8. Print summary with start/connect/test commands
@@ -1018,8 +1018,6 @@ default-character-set = utf8mb4
 quick
 max_allowed_packet = 64M
 
-[mysql-backup]
-# mariabackup settings (defaults are fine)
 ${mysqld_safe_section}"
 
         if [[ "$OS" == "windows" ]]; then
@@ -1194,14 +1192,20 @@ rebuild_plugin() {
             "  Run a full install first before using --rebuild-plugin."
     fi
 
-    # Re-copy plugin source into the existing source tree.  The test suites live
-    # under tidesdb/mysql-test, so this copy refreshes them along with the code.
+    # Re-copy plugin source into the existing source tree.
     info "Copying TidesDB plugin source into MySQL source tree..."
     cp -r "${SCRIPT_DIR}/tidesdb" "${mysql_src}/storage/"
-    # Remove any stale copies an older install left in the server's global
-    # mysql-test tree so MTR does not discover two suites of the same name.
-    rm -rf "${mysql_src}/mysql-test/suite/tidesdb" \
-           "${mysql_src}/mysql-test/suite/tidesdb_galera"
+
+    # And refresh the suites where MySQL looks for them.  Copying the engine does not
+    # carry them: MySQL finds a suite under mysql-test/suite, never under the engine's
+    # own directory, so a rebuild that skipped this would leave the previous build's
+    # tests in place and quietly test the wrong thing.
+    info "Refreshing the TideSQL test suites..."
+    local suite_dir="${mysql_src}/mysql-test/suite"
+    mkdir -p "${suite_dir}"
+    rm -rf "${suite_dir}/tidesdb" "${suite_dir}/tidesdb_rpl"
+    cp -R "${SCRIPT_DIR}/tidesdb/mysql-test/tidesdb"     "${suite_dir}/tidesdb"
+    cp -R "${SCRIPT_DIR}/tidesdb/mysql-test/tidesdb_rpl" "${suite_dir}/tidesdb_rpl"
 
     # Point cmake at the TidesDB library
     export TIDESDB_ROOT="${TIDESDB_PREFIX}"
@@ -1284,7 +1288,6 @@ pgo_instrument() {
         -B "${mysql_build}"
         -DCMAKE_INSTALL_PREFIX="${MYSQL_PREFIX}"
         -DCMAKE_BUILD_TYPE=Release
-        -DWITH_MARIABACKUP=ON
         -DWITH_UNIT_TESTS=OFF
     )
 
@@ -1409,7 +1412,6 @@ pgo_optimize() {
         -B "${mysql_build}"
         -DCMAKE_INSTALL_PREFIX="${MYSQL_PREFIX}"
         -DCMAKE_BUILD_TYPE=Release
-        -DWITH_MARIABACKUP=ON
         -DWITH_UNIT_TESTS=OFF
     )
 

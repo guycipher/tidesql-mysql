@@ -39,8 +39,10 @@ jobs:
       # Two things the Windows checkout would otherwise do to the working tree, both
       # of which have to be settled before anything is cloned.
       #
-      # Symlinks: the test suite is assembled from them (see "Materialize" below), and
-      # a Windows checkout writes them out as text stubs unless git is told otherwise.
+      # Symlinks: nothing in the tree is one today, so this changes nothing now.  It
+      # is set because a Windows checkout turns a symlink into a text file holding its
+      # target path, and a suite file that silently became a one-line text stub would
+      # be read as the test failing rather than as the checkout being wrong.
       #
       # Line endings: the runner defaults core.autocrlf to true, so every file git
       # considers text arrives CRLF.  Neither this repository nor mysql-server asks for

@@ -5,8 +5,56 @@ description: Building the plugin against a server source tree, loading it, and t
 
 # Installing TideSQL
 
-TideSQL is a shared-object plugin, `ha_tidesdb.so`. It links the TidesDB library, so that has to be
-installed first — the plugin's build looks for `libtidesdb` and fails configuration without it.
+TideSQL is a loadable plugin — `ha_tidesdb.so` on Linux and macOS, `ha_tidesdb.dll` on Windows. It
+links the TidesDB library, so that has to be installed first: the plugin's build looks for
+`libtidesdb` and fails configuration without it.
+
+Everything below names the `.so`. On Windows the file is the `.dll` and the rest reads the same.
+
+## The quick way: install.sh
+
+`install.sh` in the repository root does the whole thing — dependencies, the TidesDB library, a
+MySQL server built with the plugin in it, and an initialised data directory with a `my.cnf` that
+already loads the engine:
+
+```bash
+./install.sh
+```
+
+It detects the platform and installs dependencies through whichever package manager belongs to it:
+`apt`, `dnf` or `pacman` on Linux, Homebrew on macOS, vcpkg on Windows under MSYS2 or Git Bash.
+Then it builds and installs `libtidesdb`, clones the server, copies the engine into `storage/`,
+copies the test suites into `mysql-test/suite/`, builds, installs, and prints the commands to start
+the server and run the tests.
+
+The flags worth knowing:
+
+| Flag | What it does |
+|------|--------------|
+| `--tidesdb-version VERSION` | TidesDB release tag; defaults to the latest on GitHub |
+| `--mysql-version VERSION` | MySQL branch or tag; defaults to the latest on GitHub |
+| `--tidesdb-prefix DIR`, `--mysql-prefix DIR` | Where each is installed |
+| `--build-dir DIR` | Working directory for the build |
+| `--jobs N` | Parallel build jobs; auto-detected otherwise |
+| `--skip-deps`, `--skip-tidesdb` | Skip dependency installation, or the library build if it is already installed |
+| `--skip-engines ENGINES` | Comma-separated engines to leave out of the server; `--list-engines` shows what can be skipped |
+| `--rebuild-plugin` | Rebuild only the plugin against an existing server build, for a fast edit-build-test cycle |
+| `--allocator NAME` | Allocator for `libtidesdb`: `system` (default), `jemalloc`, `mimalloc` or `tcmalloc`. See the loading note below |
+| `--s3` | Build the library's S3 object-store connector; needs libcurl |
+| `--pgo` | Three-phase profile-guided build: instrument, train on the test suite, rebuild optimised |
+
+```bash
+./install.sh --mysql-version mysql-9.7.0 --jobs 8
+./install.sh --skip-deps --skip-tidesdb        # rebuild against what is already installed
+./install.sh --rebuild-plugin                  # just the plugin, after an edit
+```
+
+`--rebuild-plugin` needs a full run to have happened first; it reuses that build tree rather than
+configuring a new one. It does not rebuild `libtidesdb`, so a changed `--allocator` or `--s3` needs
+a full run to take effect.
+
+The rest of this page is the manual path, which is what to read if you are building against a server
+tree you already have.
 
 ## Building the plugin
 
@@ -23,13 +71,29 @@ cmake --build build-tidesdb --parallel && sudo cmake --install build-tidesdb
 git clone https://github.com/tidesdb/tidesql.git
 cp -r tidesql/tidesdb /path/to/mysql-server/storage/tidesdb
 
-# 3. configure and build the server; the plugin is the `tidesdb` target
+# 3. the test suites, where MySQL looks for a suite
+cp -r tidesql/tidesdb/mysql-test/tidesdb     /path/to/mysql-server/mysql-test/suite/tidesdb
+cp -r tidesql/tidesdb/mysql-test/tidesdb_rpl /path/to/mysql-server/mysql-test/suite/tidesdb_rpl
+
+# 4. configure and build the server; the plugin is the `tidesdb` target
 cmake -S /path/to/mysql-server -B build -DCMAKE_BUILD_TYPE=RelWithDebInfo -DWITH_UNIT_TESTS=OFF
 cmake --build build --target tidesdb --parallel
 ```
 
-That leaves `ha_tidesdb.so` in the build's plugin output directory. Copy it into the server's
-`plugin_dir`, or point `plugin_dir` at the build output while developing.
+Step 3 is easy to skip and it is not optional. MySQL discovers a test suite under
+`mysql-test/suite`, and nowhere else — it does not look inside a storage engine's own directory, so
+the suites shipped in `tidesdb/mysql-test/` are invisible until they are copied. `mtr` then finds
+them by name:
+
+```bash
+cd build/mysql-test
+./mtr --suite=tidesdb --parallel=4
+```
+
+That leaves the plugin in the build's plugin output directory. Copy it into the server's
+`plugin_dir`, or point `plugin_dir` at the build output while developing. Visual Studio is a
+multi-configuration generator, so on Windows the file is one level deeper, under the configuration
+name — `plugin_output_directory/RelWithDebInfo/ha_tidesdb.dll`.
 
 The plugin declares itself with the server's `MYSQL_ADD_PLUGIN` macro as `MODULE_ONLY`, so it is
 always a loadable module and never linked into the server binary.
