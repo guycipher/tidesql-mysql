@@ -1,0 +1,20 @@
+# Line endings are LF everywhere, on every platform.
+#
+# Git's default on Windows is to convert text files to CRLF on checkout, and this
+# tree cannot take that.  A .result file is compared byte for byte against what the
+# server wrote, so a CRLF copy differs on every line of every test; mysqltest reads
+# .test and .inc files a line at a time and a trailing \r becomes part of the last
+# argument on the line; and mtr's own parsers reject a "blank" line that carries a
+# lone \r.  None of it fails loudly enough to be obvious -- it reads as the engine
+# being broken on Windows.
+#
+# Declaring it here rather than relying on each contributor's core.autocrlf is what
+# makes a Windows clone identical to a Linux one without anyone configuring anything.
+* text=auto eol=lf
+
+# Binary, so never touched.
+*.png binary
+*.jpg binary
+*.pdf binary
+*.zip binary
+*.gz binary

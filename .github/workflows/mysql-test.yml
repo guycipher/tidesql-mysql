@@ -36,12 +36,25 @@ jobs:
         os: [ubuntu-latest, macos-15, macos-15-intel, windows-2022]
 
     steps:
-      # The test suite is assembled from symlinks (see "Materialize" below), and a
-      # Windows checkout writes those out as text stubs unless git is told to make
-      # real links.  This has to run before the checkout that creates them.
-      - name: Allow symlinks in the checkout (Windows)
+      # Two things the Windows checkout would otherwise do to the working tree, both
+      # of which have to be settled before anything is cloned.
+      #
+      # Symlinks: the test suite is assembled from them (see "Materialize" below), and
+      # a Windows checkout writes them out as text stubs unless git is told otherwise.
+      #
+      # Line endings: the runner defaults core.autocrlf to true, so every file git
+      # considers text arrives CRLF.  Neither this repository nor mysql-server asks for
+      # that in .gitattributes, and mysql-test is not written for it -- mtr rejects
+      # mysql-test/collections/disabled.def because a blank line carrying a lone \r is
+      # not blank to its parser, and .result files compared byte for byte against
+      # server output would differ on every line.  Turning it off is what makes the
+      # Windows tree identical to the one the other platforms test.
+      - name: Keep the checkout byte-identical to Unix (Windows)
         if: runner.os == 'Windows'
-        run: git config --global core.symlinks true
+        run: |
+          git config --global core.symlinks true
+          git config --global core.autocrlf false
+          git config --global core.eol lf
 
       - name: Checkout TideSQL
         uses: actions/checkout@v4
