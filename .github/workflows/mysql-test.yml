@@ -265,12 +265,21 @@ jobs:
 
       # RULES.md rule 8 is zero warnings, for this plugin rather than for the whole
       # server, so the filter keeps only diagnostics whose path is in the engine.
+      #
+      # D9025 is excluded because it is not a diagnostic about code.  MySQL sets
+      # CMAKE_CXX_STANDARD 23, which MSVC takes as /std:c++23preview and warns about
+      # overriding the /std:c++latest already on the command line.  It is emitted once
+      # per compiler invocation for every target in the build -- sql_dd, sql_main and
+      # innobase among them -- and naming a target's vcxproj is what puts the engine's
+      # path in the line.  Failing on it would mean failing on the server's own build
+      # configuration, which this gate has no business policing.
       - name: Zero-warning gate
         shell: bash
         run: |
           set -euo pipefail
           warnings=$(tr '\\' '/' < build.log \
                      | grep -i 'warning' \
+                     | grep -v 'warning D9025' \
                      | grep 'storage/tidesdb/' || true)
           if [ -n "$warnings" ]; then
             echo "plugin build is not warning-clean:"
