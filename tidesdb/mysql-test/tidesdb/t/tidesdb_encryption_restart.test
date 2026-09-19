@@ -1,0 +1,56 @@
+--source ../include/have_tidesdb.inc
+
+#
+# Encrypted tables stay readable across a restart.
+#
+# A table key is stored wrapped, and the master key that unwraps it lives in the keyring under a
+# name built from the server uuid.  So reading an encrypted table after a restart is the one case
+# that exercises the whole chain end to end: the engine has to re-read the uuid, rebuild the same
+# key name, find the master key the previous boot minted, and unwrap the table key with it.
+#
+# Within a single boot none of that is tested -- the keys are already in memory, and a name built
+# from a wrong or empty uuid would be used consistently for both the write and the read, so the
+# tables would appear to work.  It only breaks at the next startup, which is what this covers.
+#
+
+--source ../include/have_tidesdb_encryption.inc
+
+--echo #
+--echo # Write an encrypted table, then take the server down
+--echo #
+
+CREATE TABLE t_enc_restart (
+  id  INT NOT NULL PRIMARY KEY,
+  val VARCHAR(100)
+) ENGINE=TIDESDB ENGINE_ATTRIBUTE='{"encrypted": true}';
+
+INSERT INTO t_enc_restart VALUES (1, 'secret_one'), (2, 'secret_two'), (3, 'secret_three');
+SELECT * FROM t_enc_restart ORDER BY id;
+
+--echo # Restart with the same manifest, so the keyring component comes back with the keys the
+--echo # previous boot wrote to it.
+--source include/keyring_tests/helper/start_server_with_manifest.inc
+
+--echo #
+--echo # The rows read back, which means the master key was found under the same name
+--echo #
+
+SELECT * FROM t_enc_restart ORDER BY id;
+
+--echo # and the table is still declared encrypted.  CREATE_OPTIONS is not where this shows up --
+--echo # the engine takes the flag as an engine attribute, so SHOW CREATE TABLE is what carries it.
+SHOW CREATE TABLE t_enc_restart;
+
+--echo #
+--echo # Writes after the restart use the same key and read back too
+--echo #
+
+INSERT INTO t_enc_restart VALUES (4, 'secret_four');
+UPDATE t_enc_restart SET val = 'updated_after_restart' WHERE id = 2;
+SELECT * FROM t_enc_restart ORDER BY id;
+
+DROP TABLE t_enc_restart;
+
+--source ../include/cleanup_tidesdb.inc
+--source ../include/cleanup_tidesdb_encryption.inc
+--echo # Done.

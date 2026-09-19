@@ -1,0 +1,91 @@
+#
+# TEST 1: renaming the child
+#
+CREATE TABLE rn_p (id INT PRIMARY KEY) ENGINE=TidesDB;
+CREATE TABLE rn_c (cid INT PRIMARY KEY, pref INT, KEY pref_idx (pref),
+CONSTRAINT fk_rn FOREIGN KEY (pref) REFERENCES rn_p (id)) ENGINE=TidesDB;
+INSERT INTO rn_p VALUES (1);
+INSERT INTO rn_c VALUES (10, 1);
+RENAME TABLE rn_c TO rn_c2;
+# a dangling reference is still refused after the rename
+INSERT INTO rn_c2 VALUES (11, 999);
+ERROR 23000: Cannot add or update a child row: a foreign key constraint failsfk_rn
+# and a valid one still accepted
+INSERT INTO rn_c2 VALUES (12, 1);
+# the parent side followed too, so a referenced parent row is still protected
+DELETE FROM rn_p WHERE id = 1;
+ERROR 23000: Cannot delete or update a parent row: a foreign key constraint failsfk_rn
+SELECT * FROM rn_c2 ORDER BY cid;
+cid	pref
+10	1
+12	1
+DROP TABLE rn_c2, rn_p;
+#
+# TEST 2: renaming the parent
+#
+CREATE TABLE rp_p (id INT PRIMARY KEY) ENGINE=TidesDB;
+CREATE TABLE rp_c (cid INT PRIMARY KEY, pref INT, KEY pref_idx (pref),
+CONSTRAINT fk_rp FOREIGN KEY (pref) REFERENCES rp_p (id)) ENGINE=TidesDB;
+INSERT INTO rp_p VALUES (1);
+INSERT INTO rp_c VALUES (10, 1);
+RENAME TABLE rp_p TO rp_p2;
+# the child probes the parent's new name, so a dangling reference is still refused
+INSERT INTO rp_c VALUES (11, 999);
+ERROR 23000: Cannot add or update a child row: a foreign key constraint failsfk_rp
+INSERT INTO rp_c VALUES (12, 1);
+# and the renamed parent still blocks a delete its child depends on
+DELETE FROM rp_p2 WHERE id = 1;
+ERROR 23000: Cannot delete or update a parent row: a foreign key constraint failsfk_rp
+SELECT * FROM rp_c ORDER BY cid;
+cid	pref
+10	1
+12	1
+DROP TABLE rp_c, rp_p2;
+#
+# TEST 3: a self-reference names the table on both sides
+#
+CREATE TABLE sr (id INT PRIMARY KEY, parent_id INT, KEY p_idx (parent_id),
+CONSTRAINT fk_sr FOREIGN KEY (parent_id) REFERENCES sr (id)) ENGINE=TidesDB;
+INSERT INTO sr VALUES (1, NULL), (2, 1);
+RENAME TABLE sr TO sr2;
+INSERT INTO sr2 VALUES (3, 999);
+ERROR 23000: Cannot add or update a child row: a foreign key constraint failsfk_sr
+INSERT INTO sr2 VALUES (4, 2);
+DELETE FROM sr2 WHERE id = 2;
+ERROR 23000: Cannot delete or update a parent row: a foreign key constraint failsfk_sr
+SELECT * FROM sr2 ORDER BY id;
+id	parent_id
+1	NULL
+2	1
+4	2
+DROP TABLE sr2;
+#
+# TEST 4: ALTER TABLE adds a constraint that is actually enforced
+#
+CREATE TABLE al_p (id INT PRIMARY KEY) ENGINE=TidesDB;
+CREATE TABLE al_c (cid INT PRIMARY KEY, pref INT, KEY pref_idx (pref)) ENGINE=TidesDB;
+INSERT INTO al_p VALUES (1);
+ALTER TABLE al_c ADD CONSTRAINT fk_al FOREIGN KEY (pref) REFERENCES al_p (id);
+# the constraint the server now reports is one the engine enforces
+INSERT INTO al_c VALUES (11, 999);
+ERROR 23000: Cannot add or update a child row: a foreign key constraint failsfk_al
+INSERT INTO al_c VALUES (10, 1);
+DELETE FROM al_p WHERE id = 1;
+ERROR 23000: Cannot delete or update a parent row: a foreign key constraint failsfk_al
+SELECT * FROM al_c ORDER BY cid;
+cid	pref
+10	1
+#
+# TEST 5: an unrelated ALTER on a table that already has one keeps it
+#
+ALTER TABLE al_c ADD COLUMN note INT NOT NULL DEFAULT 0;
+INSERT INTO al_c VALUES (13, 999, 7);
+ERROR 23000: Cannot add or update a child row: a foreign key constraint failsfk_al
+INSERT INTO al_c VALUES (14, 1, 8);
+# the row written before the ALTER still holds the value it was given
+SELECT cid, pref, note FROM al_c ORDER BY cid;
+cid	pref	note
+10	1	0
+14	1	8
+DROP TABLE al_c, al_p;
+# Done.

@@ -3,13 +3,13 @@
 #
 # Concurrent same-row update test for TidesDB optimistic MVCC.
 #
-# Drives 8 concurrent client processes against a single counter row,
-# each doing 3000 iterations of a New-Order-shaped transaction:
+# Drives 8 concurrent client connections against a single counter row,
+# each running a New-Order-shaped transaction:
 #
 #   BEGIN;
 #   SELECT d_next_o_id ... FOR UPDATE;
 #   UPDATE district SET d_next_o_id = d_next_o_id + 1 ...;
-#   INSERT INTO txn_log (vu, ts) VALUES (vu, ts);
+#   INSERT INTO txn_log (vu, ts) VALUES (CONNECTION_ID(), ts);
 #   COMMIT;
 #
 # The txn_log INSERT shares the transaction.  Each transaction either
@@ -25,6 +25,11 @@
 # committed without TDB_ERR_CONFLICT firing.  The test passes
 # deterministically (OK) when MVCC conflict detection serialises the
 # concurrent increments correctly.
+#
+# The load is driven by mysqlslap rather than a shell loop.  It is a
+# client mtr already exports, it holds one connection per worker
+# instead of spawning a process per transaction, and it runs on every
+# platform the server builds on.
 #
 
 call mtr.add_suppression("\\[TIDESDB\\].*hton_commit: tidesdb_txn_commit returned");
@@ -44,43 +49,73 @@ CREATE TABLE district (
 
 CREATE TABLE txn_log (
   id BIGINT NOT NULL AUTO_INCREMENT,
-  vu INT NOT NULL,
+  vu BIGINT UNSIGNED NOT NULL,
   ts BIGINT NOT NULL,
   PRIMARY KEY (id)
 ) ENGINE=TidesDB;
 
 INSERT INTO district VALUES (1, 1, 3001);
 
-# 8 parallel client processes, each running 3000 increment transactions
-# on the same row.  Brace expansion in bash keeps MTR's $-substitution
-# from rewriting the loop variables.  Worker stderr is silenced because
-# TDB_ERR_CONFLICT rollbacks are expected and would otherwise flood
-# the test output.  The vu number is interpolated into the txn_log
-# INSERT so the row counts are attributable per-worker if needed.
---exec bash -c "for vu in {1..8}; do (for i in {1..3000}; do $MYSQL --no-defaults --socket=$MASTER_MYSOCK -uroot test -e \"BEGIN; SELECT d_next_o_id FROM district WHERE d_w_id=1 AND d_id=1 FOR UPDATE; UPDATE district SET d_next_o_id = d_next_o_id + 1 WHERE d_w_id=1 AND d_id=1; INSERT INTO txn_log (vu, ts) VALUES (\$vu, UNIX_TIMESTAMP()); COMMIT;\" >/dev/null 2>&1; done) & done; wait"
+# The transaction lives in a procedure so that a commit conflict stays
+# inside the server.  A conflict reaches the client as an error, and a
+# mysqlslap worker exits its loop on the first error it sees, which
+# would end the run as soon as the contention this test wants actually
+# happened.  The EXIT handler turns the expected conflict into a normal
+# return, so a worker keeps going and CALL never fails.  It is an EXIT
+# rather than a CONTINUE handler so a failure anywhere in the
+# transaction leaves through the same rollback, and the two writes stay
+# all-or-nothing -- which is what the invariant below counts on.
+DELIMITER |;
+CREATE PROCEDURE new_order()
+BEGIN
+  DECLARE EXIT HANDLER FOR SQLEXCEPTION ROLLBACK;
+  START TRANSACTION;
+  SELECT d_next_o_id INTO @cur FROM district WHERE d_w_id=1 AND d_id=1 FOR UPDATE;
+  UPDATE district SET d_next_o_id = d_next_o_id + 1 WHERE d_w_id=1 AND d_id=1;
+  INSERT INTO txn_log (vu, ts) VALUES (CONNECTION_ID(), UNIX_TIMESTAMP());
+  COMMIT;
+END|
+DELIMITER ;|
+
+# 8 workers sharing 8000 transactions on the one row.  --number-of-queries
+# is divided across the workers, and the statement list is a single CALL,
+# so each worker runs exactly 1000 transactions.
+--exec $MYSQL_SLAP --silent --create-schema=test --concurrency=8 --number-of-queries=8000 --delimiter=";" --query="CALL new_order()" 2>&1
 
 # Compute the invariant.  With correct optimistic MVCC every committed
 # transaction increments d_next_o_id by exactly 1 and lands one
 # txn_log row.  A lost update commits both writes but collapses the
 # UPDATE result, so commits_logged ends up greater than counter_delta.
 #
+# conflicts is what the run rolled back.  It is asserted to be non-zero
+# because a run where every transaction committed never exercised
+# conflict detection at all -- the invariant would hold trivially and
+# the test would be proving nothing.
+#
 # The absolute counts vary by conflict rate so we mask them; only the
-# verdict column is asserted by the .result file.  OK means delta ==
-# commits_logged.  LOST_UPDATE / PHANTOM_INCREMENT diff against OK
-# and fail the test, with the gap visible in the failure diff.
---replace_column 1 # 2 #
+# two verdict columns are asserted by the .result file.  OK means
+# delta == commits_logged.  LOST_UPDATE / PHANTOM_INCREMENT diff
+# against OK and fail the test, with the gap visible in the diff.
+--replace_column 1 # 2 # 3 #
 SELECT
   d_next_o_id - 3001 AS counter_delta,
   (SELECT COUNT(*) FROM txn_log) AS commits_logged,
+  8000 - (SELECT COUNT(*) FROM txn_log) AS conflicts,
   CASE
     WHEN d_next_o_id - 3001 = (SELECT COUNT(*) FROM txn_log)
       THEN 'OK'
     WHEN d_next_o_id - 3001 < (SELECT COUNT(*) FROM txn_log)
       THEN 'LOST_UPDATE'
     ELSE 'PHANTOM_INCREMENT'
-  END AS verdict
+  END AS verdict,
+  CASE
+    WHEN (SELECT COUNT(*) FROM txn_log) < 8000
+      THEN 'CONTENDED'
+    ELSE 'NO_CONTENTION'
+  END AS contention
 FROM district WHERE d_w_id=1 AND d_id=1;
 
+DROP PROCEDURE new_order;
 DROP TABLE district;
 DROP TABLE txn_log;
 

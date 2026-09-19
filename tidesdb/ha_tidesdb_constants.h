@@ -61,6 +61,32 @@ static constexpr uint AUTOINC_META_VALUE_LEN = 8;
 static constexpr uint8_t OPTIONS_META_KEY[] = {KEY_NS_META, 'O', 'P', 'T', 'S'};
 static constexpr uint OPTIONS_META_KEY_LEN = 5;
 
+/* How one index's keys were encoded, written when the index is created.
+ *
+ * The bytes of a key are not decidable from the column list alone: a nullable part carries a
+ * leading indicator byte and a NOT NULL part does not, so the same columns produce different keys
+ * depending on a fact about the table rather than about the index.  Anything rebuilding these keys
+ * from outside -- a foreign key's child probing its parent's unique index -- has to know which
+ * convention they were written under, and asking the server for it later answers for the table as
+ * it is now rather than as it was when the keys were written.
+ *
+ * This lives in the table's data column family, not in the index's own, and the index name is part
+ * of the key.  An index family holds nothing but index entries and its scans read every key in it
+ * as one, so a meta record there is read back as a malformed entry; the data family already
+ * separates the two by namespace and drops, renames and truncates with the table either way.
+ *
+ * Key is [KEY_NS_META]["KSHP"][index name].  Value is [version(1)][part count(2 LE)][one byte per
+ * part], each byte non-zero where that part carries a null indicator.  A primary key never needs
+ * one: its columns cannot be nullable, so its absence reads as every part value-only, which is
+ * correct. */
+static constexpr uint8_t KEYSHAPE_META_PREFIX[] = {KEY_NS_META, 'K', 'S', 'H', 'P'};
+static constexpr uint KEYSHAPE_META_PREFIX_LEN = 5;
+static constexpr uint8_t KEYSHAPE_VERSION = 1;
+
+/* The name the server gives every primary key, and the only name a foreign key's resolved parent
+   key can carry that means "the primary key" rather than a named unique one. */
+static constexpr const char TDB_PRIMARY_KEY_NAME[] = "PRIMARY";
+
 static constexpr uint8_t KEY_NS_DATA = 0x01;
 
 /* Size of the namespace prefix that every TidesDB key starts with. */

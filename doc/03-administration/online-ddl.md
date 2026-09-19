@@ -36,6 +36,22 @@ ALTER TABLE events CHANGE kind event_kind VARCHAR(50), ALGORITHM=INSTANT;
 ALTER TABLE events ENGINE_ATTRIBUTE='{"compression": "ZSTD"}', ALGORITHM=INSTANT;
 ```
 
+There is one exception, and it is about the null bitmap rather than the column being added. A stored
+row carries the server's own bitmap verbatim, and the server numbers its bits from one position in a
+record that holds only fixed-width columns and from another once the record holds a variable-length
+one. So the statement that gives a table its first `VARCHAR`, `TEXT` or `BLOB` column moves the bit
+every existing column's null flag sits at, and the rows have to be rewritten to match. The engine
+asks for a rebuild there rather than reading old rows against the new numbering, which would return
+`NULL` for columns that hold a value. `ALGORITHM=INSTANT` is refused on that statement:
+
+```
+ERROR 1845 (0A000): ALGORITHM=INSTANT is not supported. Reason: TidesDB must rebuild the table
+when the record's null bitmap moves. Try ALGORITHM=COPY/INPLACE.
+```
+
+Dropping the last variable-length column moves the bits back and is a rebuild for the same reason.
+Adding a second or later variable-length column is instant, since the numbering is already settled.
+
 ## Inplace
 
 Adding or dropping a non-FULLTEXT, non-SPATIAL secondary index runs inplace. The engine creates a

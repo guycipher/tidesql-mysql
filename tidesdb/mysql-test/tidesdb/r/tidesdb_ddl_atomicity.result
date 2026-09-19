@@ -1,0 +1,60 @@
+#
+# TEST 1: a DROP the server rolls back leaves the table and its rows
+#
+CREATE TABLE at_keep (id INT PRIMARY KEY, v VARCHAR(20), KEY v_idx (v)) ENGINE=TidesDB;
+INSERT INTO at_keep VALUES (1, 'one'), (2, 'two');
+# the whole statement fails, so nothing is dropped
+DROP TABLE at_keep, at_no_such_table;
+ERROR 42S02: Unknown table 'test.at_no_such_table'
+# the table is still here, with its rows, readable by scan and by index
+SELECT * FROM at_keep ORDER BY id;
+id	v
+1	one
+2	two
+SELECT id FROM at_keep WHERE v = 'two';
+id
+2
+SELECT COUNT(*) AS rows_kept FROM at_keep;
+rows_kept
+2
+# and it still works for writes afterwards
+INSERT INTO at_keep VALUES (3, 'three');
+SELECT * FROM at_keep ORDER BY id;
+id	v
+1	one
+2	two
+3	three
+#
+# TEST 2: a DROP that commits does remove the storage
+#
+DROP TABLE at_keep;
+# recreating the same name gives an empty table rather than the old rows
+CREATE TABLE at_keep (id INT PRIMARY KEY, v VARCHAR(20), KEY v_idx (v)) ENGINE=TidesDB;
+SELECT COUNT(*) AS rows_after_recreate FROM at_keep;
+rows_after_recreate
+0
+DROP TABLE at_keep;
+#
+# TEST 3: a rolled-back DROP of several tables leaves all of them
+#
+CREATE TABLE at_a (id INT PRIMARY KEY) ENGINE=TidesDB;
+CREATE TABLE at_b (id INT PRIMARY KEY) ENGINE=TidesDB;
+INSERT INTO at_a VALUES (1);
+INSERT INTO at_b VALUES (2);
+DROP TABLE at_a, at_b, at_no_such_table;
+ERROR 42S02: Unknown table 'test.at_no_such_table'
+SELECT * FROM at_a;
+id
+1
+SELECT * FROM at_b;
+id
+2
+DROP TABLE at_a, at_b;
+#
+# TEST 4: the tables really are gone once the drop commits
+#
+SELECT * FROM at_a;
+ERROR 42S02: Table 'test.at_a' doesn't exist
+SELECT * FROM at_b;
+ERROR 42S02: Table 'test.at_b' doesn't exist
+# Done.

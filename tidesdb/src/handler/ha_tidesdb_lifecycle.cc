@@ -85,6 +85,11 @@ int ha_tidesdb::rename_table(const char *from, const char *to TDB_DD_RENAME_ARG)
         }
     }
 
+    /* The column families now answer to the new name, so the catalog has to as well.  This runs
+       after the renames rather than before so a failure above leaves the catalog still describing
+       the table as it actually is. */
+    if (int frc = ha_tidesdb::fk_rename_catalog(from, to)) DBUG_RETURN(frc);
+
     DBUG_RETURN(0);
 }
 

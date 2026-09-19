@@ -208,17 +208,65 @@ SELECT * FROM uq_c ORDER BY cid;
 DROP TABLE uq_c, uq_p;
 
 --echo #
---echo # 16. A reference to a NULLable unique key is rejected rather than mis-enforced
+--echo # 16. A reference to a NULLable unique key is enforced, not refused
 --echo #
+--echo # The parent's index entries carry a null indicator byte for a nullable column, so the
+--echo # child's probe has to write one too.  Both directions matter here: a probe that omitted
+--echo # the byte would find nothing and reject every child row, and one that never checked the
+--echo # bytes it found would accept rows with no parent at all.
 CREATE TABLE nu_p (id INT PRIMARY KEY, u INT, UNIQUE KEY u_idx (u)) ENGINE=TidesDB;
---error ER_CANT_CREATE_TABLE
 CREATE TABLE nu_c (
   cid INT PRIMARY KEY,
   uref INT,
   KEY uref_idx (uref),
   CONSTRAINT fk_nu FOREIGN KEY (uref) REFERENCES nu_p (u)
 ) ENGINE=TidesDB;
-DROP TABLE nu_p;
+INSERT INTO nu_p VALUES (1, 100), (2, 200), (3, NULL);
+
+--echo # an existing value is accepted -- this is what fails if the indicator is missing
+INSERT INTO nu_c VALUES (10, 100);
+--echo # a missing value is still rejected
+--error ER_NO_REFERENCED_ROW_2
+INSERT INTO nu_c VALUES (11, 999);
+--echo # MATCH SIMPLE: a null referencing column skips the check
+INSERT INTO nu_c VALUES (12, NULL);
+SELECT * FROM nu_c ORDER BY cid;
+
+--echo # the parent's own null row is not a referencable value
+--error ER_NO_REFERENCED_ROW_2
+INSERT INTO nu_c VALUES (13, 0);
+
+--echo # a referenced parent row cannot be deleted, an unreferenced one can
+--error ER_ROW_IS_REFERENCED_2
+DELETE FROM nu_p WHERE u = 100;
+DELETE FROM nu_p WHERE u = 200;
+SELECT id, u FROM nu_p ORDER BY id;
+
+--echo # and the constraint survives a reopen, which is what reads the catalog record back
+FLUSH TABLES;
+--error ER_NO_REFERENCED_ROW_2
+INSERT INTO nu_c VALUES (14, 888);
+INSERT INTO nu_c VALUES (15, 100);
+SELECT * FROM nu_c ORDER BY cid;
+DROP TABLE nu_c, nu_p;
+
+--echo #
+--echo # 17. A NOT NULL child column referencing a nullable unique key
+--echo #
+--echo # The two sides need not agree on nullability, and the probe follows the parent.
+CREATE TABLE mx_p (id INT PRIMARY KEY, u INT, UNIQUE KEY u_idx (u)) ENGINE=TidesDB;
+CREATE TABLE mx_c (
+  cid INT PRIMARY KEY,
+  uref INT NOT NULL,
+  KEY uref_idx (uref),
+  CONSTRAINT fk_mx FOREIGN KEY (uref) REFERENCES mx_p (u)
+) ENGINE=TidesDB;
+INSERT INTO mx_p VALUES (1, 7);
+INSERT INTO mx_c VALUES (10, 7);
+--error ER_NO_REFERENCED_ROW_2
+INSERT INTO mx_c VALUES (11, 8);
+SELECT * FROM mx_c ORDER BY cid;
+DROP TABLE mx_c, mx_p;
 
 --echo #
 --source ../include/cleanup_tidesdb.inc

@@ -1,0 +1,74 @@
+--source ../include/have_tidesdb.inc
+
+#
+# A DDL statement's effect on storage follows the statement.
+#
+# The engine records what a schema change intends before carrying it out, and writes that record
+# through the statement's own transaction.  So the server's commit or rollback of the statement
+# carries the record with it, and afterwards the record being in storage is what says the change
+# happened -- the engine reads its own storage for the verdict rather than asking the server.
+#
+# The case that matters is a DROP the server rolls back.  MySQL's atomic DDL rolls back a multi-
+# table DROP as a whole, so a statement naming one table that exists and one that does not must
+# leave the first completely untouched.  An engine that removed its column families when it was
+# asked, rather than when the statement committed, destroys a live table here.
+#
+
+--echo #
+--echo # TEST 1: a DROP the server rolls back leaves the table and its rows
+--echo #
+
+CREATE TABLE at_keep (id INT PRIMARY KEY, v VARCHAR(20), KEY v_idx (v)) ENGINE=TidesDB;
+INSERT INTO at_keep VALUES (1, 'one'), (2, 'two');
+
+--echo # the whole statement fails, so nothing is dropped
+--error ER_BAD_TABLE_ERROR
+DROP TABLE at_keep, at_no_such_table;
+
+--echo # the table is still here, with its rows, readable by scan and by index
+SELECT * FROM at_keep ORDER BY id;
+SELECT id FROM at_keep WHERE v = 'two';
+SELECT COUNT(*) AS rows_kept FROM at_keep;
+
+--echo # and it still works for writes afterwards
+INSERT INTO at_keep VALUES (3, 'three');
+SELECT * FROM at_keep ORDER BY id;
+
+--echo #
+--echo # TEST 2: a DROP that commits does remove the storage
+--echo #
+
+DROP TABLE at_keep;
+
+--echo # recreating the same name gives an empty table rather than the old rows
+CREATE TABLE at_keep (id INT PRIMARY KEY, v VARCHAR(20), KEY v_idx (v)) ENGINE=TidesDB;
+SELECT COUNT(*) AS rows_after_recreate FROM at_keep;
+DROP TABLE at_keep;
+
+--echo #
+--echo # TEST 3: a rolled-back DROP of several tables leaves all of them
+--echo #
+
+CREATE TABLE at_a (id INT PRIMARY KEY) ENGINE=TidesDB;
+CREATE TABLE at_b (id INT PRIMARY KEY) ENGINE=TidesDB;
+INSERT INTO at_a VALUES (1);
+INSERT INTO at_b VALUES (2);
+
+--error ER_BAD_TABLE_ERROR
+DROP TABLE at_a, at_b, at_no_such_table;
+
+SELECT * FROM at_a;
+SELECT * FROM at_b;
+DROP TABLE at_a, at_b;
+
+--echo #
+--echo # TEST 4: the tables really are gone once the drop commits
+--echo #
+
+--error ER_NO_SUCH_TABLE
+SELECT * FROM at_a;
+--error ER_NO_SUCH_TABLE
+SELECT * FROM at_b;
+
+--source ../include/cleanup_tidesdb.inc
+--echo # Done.

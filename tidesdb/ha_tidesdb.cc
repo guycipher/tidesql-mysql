@@ -189,8 +189,6 @@ static ulong srv_max_open_sstables = 256;
 /* Backing stores for the two encryption-rotation variables.  Neither holds engine state: each
    names an action its update callback carries out, and the value is only what was last asked for.
  */
-static ulong srv_rotate_table_key = 0;
-static tdb_sysvar_bool_t srv_rotate_master_key = 0;
 static tdb_sysvar_bool_t srv_log_to_file = 1; /* write TidesDB logs to file (default is yes) */
 static ulonglong srv_log_truncation_at = 24ULL * 1024 * 1024; /* log file truncation size (24MB) */
 static ulonglong srv_memtable_write_buffer_size = 256ULL * 1024 * 1024; /* 256MB */
@@ -531,160 +529,9 @@ static MYSQL_SYSVAR_STR(data_home_dir, srv_data_home_dir, PLUGIN_VAR_RQCMDARG | 
                         "must be set before server startup (read-only)",
                         NULL, NULL, NULL);
 
-/* ******************** Online backup via system variable ******************** */
-
-static char *srv_backup_dir = NULL;
-
-static void tidesdb_backup_dir_update(THD *thd, TDB_SYS_VAR *, void *var_ptr, const void *save)
-{
-    const char *new_dir = *static_cast<const char *const *>(save);
-
-    if (!new_dir || !new_dir[0])
-    {
-        /* Empty string -- we just clear the variable */
-        *static_cast<char **>(var_ptr) = NULL;
-        return;
-    }
-
-    if (!tdb_global)
-    {
-        my_error(ER_UNKNOWN_ERROR, MYF(0), "TidesDB is not open");
-        return;
-    }
-
-    /* Free the calling connection's TidesDB transaction before backup.
-       tidesdb_backup() waits for all open transactions to drain.  The
-       connection may still hold an open txn (created in external_lock
-       but not yet committed).  If we don't free it here, the backup
-       self-deadlocks waiting for our own txn. */
-    {
-        tidesdb_trx_t *trx = (tidesdb_trx_t *)thd_get_ha_data(thd, tidesdb_hton);
-        if (trx && trx->txn)
-        {
-            tidesdb_txn_rollback(trx->txn);
-            tidesdb_txn_free(trx->txn);
-            trx->txn = NULL;
-            trx->dirty = false;
-            trx->txn_generation++;
-            trx->fts_meta_pending.clear();
-            trx->fts_meta_dirty = false;
-        }
-    }
-
-    /* We copy the path before releasing the sysvar lock -- the save pointer
-       is only valid while LOCK_global_system_variables is held. */
-    std::string backup_path(new_dir);
-
-    /* tidesdb_backup() spins waiting for all CF flushes to complete.
-       The library's flush threads call sql_print_information() which
-       internally acquires LOCK_global_system_variables.  This sysvar
-       update callback is called WITH that mutex held, so tidesdb_backup()
-       deadlocks (flush thread waits for lock, we wait for flush thread).
-       Release the mutex around the blocking backup call. */
-    mysql_mutex_unlock(&LOCK_global_system_variables);
-
-    /* Backup started -- no log (user-triggered, success/failure reported via return code) */
-
-    char *backup_path_c = const_cast<char *>(backup_path.c_str());
-    int rc = tidesdb_backup(tdb_global, backup_path_c);
-
-    mysql_mutex_lock(&LOCK_global_system_variables);
-
-    if (rc != TDB_SUCCESS)
-    {
-        sql_print_error("[TIDESDB] Backup to '%s' failed (err=%d)", backup_path.c_str(), rc);
-        my_printf_error(ER_UNKNOWN_ERROR, "[TIDESDB] Backup to '%s' failed (err=%d)", MYF(0),
-                        backup_path.c_str(), rc);
-        return;
-    }
-
-    /* For PLUGIN_VAR_MEMALLOC strings, the framework manages memory.
-       We set var_ptr to the save value so the framework copies it. */
-    *static_cast<const char **>(var_ptr) = new_dir;
-}
-
-static MYSQL_SYSVAR_STR(backup_dir, srv_backup_dir, PLUGIN_VAR_RQCMDARG | PLUGIN_VAR_MEMALLOC,
-                        "Set to a directory path to trigger an online TidesDB backup: a copy "
-                        "of the database as of the flush it starts with, created if "
-                        "absent.  Must not be the live data directory. "
-                        "Example: SET GLOBAL tidesdb_backup_dir = '/path/to/backup'",
-                        NULL, tidesdb_backup_dir_update, NULL);
-
-/* Checkpoint (durability barrier, then a copy of the database) via system variable */
-
-static char *srv_checkpoint_dir = NULL;
-
-static void tidesdb_checkpoint_dir_update(THD *thd, TDB_SYS_VAR *, void *var_ptr, const void *save)
-{
-    const char *new_dir = *static_cast<const char *const *>(save);
-
-    if (!new_dir || !new_dir[0])
-    {
-        *static_cast<char **>(var_ptr) = NULL;
-        return;
-    }
-
-    if (!tdb_global)
-    {
-        my_error(ER_UNKNOWN_ERROR, MYF(0), "TidesDB is not open");
-        return;
-    }
-
-    /* A checkpoint is a durability barrier followed by a copy of the database to the requested
-       path, so the checkpoint directory holds a self-contained snapshot with its own manifest and
-       sstables that a restart or an external tool can open, not just an in-place fsync of the live
-       database. */
-
-    /* Free the calling connection's own transaction first, the same way the backup path does,
-       because both the barrier and the copy drain open transactions and would otherwise wait on
-       this connection's still-open txn. */
-    {
-        tidesdb_trx_t *trx = (tidesdb_trx_t *)thd_get_ha_data(thd, tidesdb_hton);
-        if (trx && trx->txn)
-        {
-            tidesdb_txn_rollback(trx->txn);
-            tidesdb_txn_free(trx->txn);
-            trx->txn = NULL;
-            trx->dirty = false;
-            trx->txn_generation++;
-            trx->fts_meta_pending.clear();
-            trx->fts_meta_dirty = false;
-        }
-    }
-
-    std::string checkpoint_path(new_dir);
-
-    /* Both calls block on flush completion, and the library's flush threads log through
-       sql_print_information which takes LOCK_global_system_variables, the mutex this update
-       callback already holds, so release it around the blocking work to avoid a deadlock. */
-    mysql_mutex_unlock(&LOCK_global_system_variables);
-
-    int rc = tidesdb_checkpoint(tdb_global);
-    if (rc == TDB_SUCCESS)
-        rc = tidesdb_backup(tdb_global, const_cast<char *>(checkpoint_path.c_str()));
-
-    mysql_mutex_lock(&LOCK_global_system_variables);
-
-    if (rc != TDB_SUCCESS)
-    {
-        sql_print_error("[TIDESDB] Checkpoint to '%s' failed (err=%d)", checkpoint_path.c_str(),
-                        rc);
-        my_printf_error(ER_UNKNOWN_ERROR, "[TIDESDB] Checkpoint to '%s' failed (err=%d)", MYF(0),
-                        checkpoint_path.c_str(), rc);
-        return;
-    }
-
-    *static_cast<const char **>(var_ptr) = new_dir;
-}
-
-static MYSQL_SYSVAR_STR(checkpoint_dir, srv_checkpoint_dir,
-                        PLUGIN_VAR_RQCMDARG | PLUGIN_VAR_MEMALLOC,
-                        "Set to a directory path to trigger a TidesDB checkpoint: a full "
-                        "durability barrier on the live database, then a copy of it "
-                        "written to this path.  Cost is proportional to the on-disk "
-                        "size.  Must not be the live data directory. "
-                        "Example: SET GLOBAL tidesdb_checkpoint_dir = '/path/to/checkpoint'",
-                        NULL, tidesdb_checkpoint_dir_update, NULL);
+/* Backup, checkpoint and key rotation are not system variables.  Each is a thing the server does
+   once when asked, and none of them leaves a setting behind, so each is a function; they live in
+   src/engine/ha_tidesdb_udf.cc, registered at plugin init. */
 
 /*
   Fill a table's storage options from the session defaults.
@@ -731,76 +578,12 @@ const char *const *tdb_isolation_option_names()
     return isolation_level_names;
 }
 
-/* Encryption key rotation.
- *
-   Rotation has to be asked for, and the only surface a storage engine has for a verb like that is
-   a system variable whose update does the work.  Two of them, because there are two tiers and they
-   cost very different things: rotating a table key changes what rows written from now on are
-   encrypted with and leaves every existing row alone, while rotating the master key re-wraps every
-   stored table key and, again, leaves every row alone.  Neither reads or rewrites row data.
-
-   Where the server owns key custody the engine reads versions rather than setting them, and both
-   variables are accepted and do nothing rather than being absent from one server and present on
-   the other. */
-static void tidesdb_rotate_table_key_update(THD *, TDB_SYS_VAR *, void *var_ptr, const void *save)
-{
-    const ulong key_id = *static_cast<const ulong *>(save);
-    *static_cast<ulong *>(var_ptr) = key_id;
-    if (key_id == 0) return; /* the resting value asks for nothing */
-
-    /* The rotation writes to the keyring and to a column family, and both can log; logging takes
-       the mutex this callback is already holding. */
-    mysql_mutex_unlock(&LOCK_global_system_variables);
-    const int rc = tdb_crypto_rotate_table_key((unsigned int)key_id);
-    mysql_mutex_lock(&LOCK_global_system_variables);
-
-    if (rc != TDB_CRYPTO_STATUS_OK)
-        my_printf_error(ER_UNKNOWN_ERROR, "[TIDESDB] could not rotate encryption key %lu", MYF(0),
-                        key_id);
-}
-
-static void tidesdb_rotate_master_key_update(THD *, TDB_SYS_VAR *, void *var_ptr, const void *save)
-{
-    const bool asked = *static_cast<const tdb_sysvar_bool_t *>(save) != 0;
-    *static_cast<tdb_sysvar_bool_t *>(var_ptr) = asked;
-    if (!asked) return;
-
-    mysql_mutex_unlock(&LOCK_global_system_variables);
-    const int rc = tdb_crypto_rotate_master_key();
-    mysql_mutex_lock(&LOCK_global_system_variables);
-
-    /* The variable does not stay on: it names an action, and leaving it set would suggest a state
-       the engine does not have. */
-    *static_cast<tdb_sysvar_bool_t *>(var_ptr) = false;
-
-    if (rc != TDB_CRYPTO_STATUS_OK)
-        my_printf_error(ER_UNKNOWN_ERROR, "[TIDESDB] could not rotate the master key", MYF(0));
-}
-
-static MYSQL_SYSVAR_ULONG(rotate_table_key, srv_rotate_table_key, PLUGIN_VAR_RQCMDARG,
-                          "Set to an encryption key id to give that key a new version.  Rows "
-                          "written afterwards are encrypted under it; rows already written keep "
-                          "decrypting under the version they were written with, and none of them "
-                          "are read or rewritten.  0 asks for nothing",
-                          NULL, tidesdb_rotate_table_key_update, 0, 0,
-                          TIDESDB_MAX_ENCRYPTION_KEY_ID, 0);
-
-static MYSQL_SYSVAR_BOOL(rotate_master_key, srv_rotate_master_key, PLUGIN_VAR_RQCMDARG,
-                         "Set to ON to mint a new master key and re-wrap every stored table key "
-                         "under it.  No row is read or rewritten.  The variable reports OFF again "
-                         "once the rotation is done",
-                         NULL, tidesdb_rotate_master_key_update, 0);
-
 static TDB_SYS_VAR *tidesdb_system_variables[] = {
-    MYSQL_SYSVAR(rotate_table_key),
-    MYSQL_SYSVAR(rotate_master_key),
     MYSQL_SYSVAR(flush_threads),
     MYSQL_SYSVAR(compaction_threads),
     MYSQL_SYSVAR(log_level),
     MYSQL_SYSVAR(block_cache_size),
     MYSQL_SYSVAR(max_open_sstables),
-    MYSQL_SYSVAR(backup_dir),
-    MYSQL_SYSVAR(checkpoint_dir),
     MYSQL_SYSVAR(fts_min_word_len),
     MYSQL_SYSVAR(fts_max_word_len),
     MYSQL_SYSVAR(fts_bm25_k1),
@@ -965,6 +748,10 @@ static int tidesdb_init_func(void *p)
         DBUG_RETURN(1);
     }
 
+    /* Backup, checkpoint and key rotation.  A failure to register is reported and left at that:
+       the engine still stores and serves data without them. */
+    tdb_udf_register_all();
+
     DBUG_RETURN(0);
 }
 
@@ -1033,6 +820,7 @@ static int tidesdb_deinit_func(void *p [[maybe_unused]])
         tdb_global = NULL;
     }
 
+    tdb_udf_unregister_all();
     tdb_crypto_deinit();
     fts_deinit();
 

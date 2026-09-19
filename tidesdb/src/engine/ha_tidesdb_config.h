@@ -104,24 +104,45 @@ bool tdb_table_options_error(const TABLE *tbl, std::string *error);
 /**
  * tdb_field_is_ttl_source
  * whether one column supplies each row's own expiry
- * @param dd_table_def the server's definition of the table, opaque here because only the servers
- *        that have one name the type
  * @param tbl the table
  * @param field_index the column
  * @return true when the column is named as the expiry source
- *
- * Defined only where a per-column option lives in the dictionary rather than on the Field.
  */
-bool tdb_field_is_ttl_source(const void *dd_table_def, const TABLE *tbl, uint field_index);
+bool tdb_field_is_ttl_source(const TABLE *tbl, uint field_index);
 
 /**
  * tdb_column_options_error
  * why a table's per-column attributes could not be accepted
- * @param dd_table_def the server's definition of the table
+ * @param tbl the table
  * @param error out -- a message naming the offending column
  * @return true when every column attribute is well formed and at most one names the expiry source
  */
-bool tdb_column_options_error(const void *dd_table_def, std::string *error);
+bool tdb_column_options_error(const TABLE *tbl, std::string *error);
+
+/**
+ * tdb_key_shape_store
+ * record how one index's keys are encoded, in the table's data family
+ * @param data_cf the table's data column family, where the record lives
+ * @param index_name the index the shape describes
+ * @param key_info the key whose parts it stores
+ *
+ * Written when the index is created.  See KEYSHAPE_META_PREFIX for why the column list alone does
+ * not settle the key bytes, and why this does not live in the index's own family.
+ */
+void tdb_key_shape_store(tidesdb_column_family_t *data_cf, const std::string &index_name,
+                         const KEY *key_info);
+
+/**
+ * tdb_key_shape_load
+ * read back how one index's keys are encoded
+ * @param data_cf the table's data column family
+ * @param index_name the index to read the shape of
+ * @param out out -- one entry per key part, non-zero where the part carries a null indicator;
+ *            cleared on any failure
+ * @return true when a shape record was present and understood
+ */
+bool tdb_key_shape_load(tidesdb_column_family_t *data_cf, const std::string &index_name,
+                        std::vector<uint8> *out);
 
 /**
  * tdb_table_options_store

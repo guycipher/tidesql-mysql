@@ -26,16 +26,11 @@
 /* where a foreign key's definition comes from at CREATE and ALTER time, and where the parent's
  * candidate key comes from when the constraint is resolved.
  *
- * these are the only two places the engine's foreign-key handling depends on how a server keeps
- * table definitions, and the two servers keep them in entirely different shapes: one hands the
- * engine the parser's own key list and reads the parent's definition off disk, while MySQL holds
- * both in its data dictionary.  everything the engine does afterwards -- naming the constraint,
+ * these are the only two places the engine's foreign-key handling depends on how the server keeps
+ * table definitions.  MySQL holds both in its data dictionary, so both are read from there, in
+ * ha_tidesdb_fk_source_dd.cc.  everything the engine does afterwards -- naming the constraint,
  * finding a covering index, serialising the catalog entry, enforcing on insert, update and delete
- * -- is identical, and lives in ha_tidesdb_fk.cc.
- *
- * so only extraction is split.  the two implementations are ha_tidesdb_fk_source_parser.cc and
- * ha_tidesdb_fk_source_dd.cc, and CMakeLists.txt compiles exactly one, which is why neither
- * carries a preprocessor branch.
+ * -- is independent of that and lives in ha_tidesdb_fk.cc.
  */
 
 /**
@@ -48,6 +43,8 @@
  *               database applies
  * @param ref_table the referenced table
  * @param ref_columns the referenced columns, in declared order and matching child_columns
+ * @param parent_index_name the parent key the server resolved the constraint against, empty when
+ *                          the parent key is neither primary nor unique
  * @param on_delete the delete action, as an enum_fk_option / fk_option value
  * @param on_update the update action, same encoding
  */
@@ -58,6 +55,7 @@ struct tdb_fk_spec
     std::string ref_db;
     std::string ref_table;
     std::vector<std::string> ref_columns;
+    std::string parent_index_name;
     uint8 on_delete;
     uint8 on_update;
 };
@@ -68,33 +66,31 @@ struct tdb_fk_spec
  * @param thd the session
  * @param table_arg the table being created, for its database and table name
  * @param create_info the server's create information
- * @param dd_table_def the data dictionary's definition of the table where the server keeps one,
- *                     and ignored where it does not; passed as void so this header stays free of
- *                     dictionary types
  * @param out out -- receives one entry per foreign key, cleared first
  * @return true on success, including the common case of a table with no foreign keys at all
+ *
+ * The constraints are read off the table's own share, which the server fills from the dictionary
+ * before it hands the table to either create() or open().
  */
 bool tdb_fk_extract_specs(THD *thd, TABLE *table_arg, HA_CREATE_INFO *create_info,
-                          const void *dd_table_def, std::vector<tdb_fk_spec> &out);
+                          std::vector<tdb_fk_spec> &out);
 
 /**
- * tdb_fk_resolve_parent_index
- * find the parent's candidate key a constraint references, so the child's existence probe targets
- * the parent's data family for a primary key or its index family for a unique key
- * @param thd the session
- * @param ref_db the referenced database
- * @param ref_table the referenced table
- * @param ref_cols the referenced columns
- * @param out_is_pk out -- whether the matched key is the parent's primary key
- * @param out_index_name out -- the matched key's name
- * @param out_has_nullable out -- whether any matched column is nullable, which decides whether the
- *                         rebuilt key prefix carries a null indicator
- * @return true when a primary or unique key covering exactly those columns was found; false leaves
- *         the caller to assume the primary key, which is the historical behaviour when a parent
- *         definition cannot be read
+ * tdb_fk_parent_key_shape
+ * how the parent encoded the key this constraint references, so the child's probe rebuilds the
+ * same bytes
+ * @param parent_cf the referenced table's data column family
+ * @param parent_index_name the referenced key, as the server resolved it
+ * @param out out -- one entry per key part, non-zero where that part carries a null indicator;
+ *            cleared when the shape is not known
+ * @return true when a shape was read
+ *
+ * The answer comes from the parent's own index column family rather than from the server, because
+ * what matters is the convention the stored keys were written under, not the table's shape now.
+ * A primary key needs no lookup: its columns cannot be nullable, so an empty result is correct and
+ * this is not called for one.
  */
-bool tdb_fk_resolve_parent_index(THD *thd, const std::string &ref_db, const std::string &ref_table,
-                                 const std::vector<std::string> &ref_cols, bool &out_is_pk,
-                                 std::string &out_index_name, bool &out_has_nullable);
+bool tdb_fk_parent_key_shape(const std::string &parent_cf, const std::string &parent_index_name,
+                             std::vector<uint8> &out);
 
 #endif /* HA_TIDESDB_FK_SOURCE_H */

@@ -1,0 +1,83 @@
+--source ../include/have_tidesdb.inc
+
+#
+# Adding a column must not move the null bits under rows already written.
+#
+# A stored row carries the server's own null bitmap verbatim, so which bit a column's null flag
+# sits at is part of the format the row was written in.  The server reserves the leading bit for a
+# record that is not packed and starts the columns at zero for one that is, and a table gains the
+# packed form the moment it gets its first variable-length column.  An instant ADD COLUMN across
+# that boundary would leave every existing row read with its null bits one place over from where
+# they were written, so a column that held a value comes back NULL -- silently, because the bytes
+# are all still there.  The engine refuses the instant path there and lets the copy algorithm
+# rewrite the rows instead.
+#
+# Every SELECT below is the assertion: the value each row was given has to survive the ALTER.
+#
+
+--echo #
+--echo # TEST 1: adding the first variable-length column keeps the existing values
+--echo #
+
+CREATE TABLE nb1 (cid INT PRIMARY KEY, pref INT) ENGINE=TidesDB;
+INSERT INTO nb1 VALUES (10, 1), (11, NULL), (12, 2);
+ALTER TABLE nb1 ADD COLUMN note VARCHAR(20);
+--echo # pref must still read 1, NULL, 2 -- and note NULL everywhere
+SELECT cid, pref, note FROM nb1 ORDER BY cid;
+DROP TABLE nb1;
+
+--echo #
+--echo # TEST 2: the same, with the new column NOT NULL and defaulted
+--echo #
+
+CREATE TABLE nb2 (cid INT PRIMARY KEY, pref INT) ENGINE=TidesDB;
+INSERT INTO nb2 VALUES (10, 1), (11, NULL);
+ALTER TABLE nb2 ADD COLUMN note VARCHAR(20) NOT NULL DEFAULT 'd';
+SELECT cid, pref, note FROM nb2 ORDER BY cid;
+DROP TABLE nb2;
+
+--echo #
+--echo # TEST 3: ALGORITHM=INSTANT is refused rather than silently corrupting
+--echo #
+
+CREATE TABLE nb3 (cid INT PRIMARY KEY, pref INT) ENGINE=TidesDB;
+INSERT INTO nb3 VALUES (10, 1);
+--error ER_ALTER_OPERATION_NOT_SUPPORTED_REASON
+ALTER TABLE nb3 ADD COLUMN note VARCHAR(20), ALGORITHM=INSTANT;
+--echo # the refused statement changed nothing
+SELECT cid, pref FROM nb3;
+DROP TABLE nb3;
+
+--echo #
+--echo # TEST 4: dropping the last variable-length column moves the bits back
+--echo #
+
+CREATE TABLE nb4 (cid INT PRIMARY KEY, pref INT, v VARCHAR(10)) ENGINE=TidesDB;
+INSERT INTO nb4 VALUES (10, 1, 'x'), (11, NULL, 'y');
+ALTER TABLE nb4 DROP COLUMN v;
+SELECT cid, pref FROM nb4 ORDER BY cid;
+DROP TABLE nb4;
+
+--echo #
+--echo # TEST 5: the cases that stay instant are still instant, and still correct
+--echo #
+--echo # A fixed-width column does not change the record format, so this one must not be
+--echo # pushed onto the copy path by the check above.
+
+CREATE TABLE nb5 (cid INT PRIMARY KEY, pref INT) ENGINE=TidesDB;
+INSERT INTO nb5 VALUES (10, 1), (11, NULL);
+ALTER TABLE nb5 ADD COLUMN note INT, ALGORITHM=INSTANT;
+SELECT cid, pref, note FROM nb5 ORDER BY cid;
+ALTER TABLE nb5 ADD COLUMN fixed CHAR(5), ALGORITHM=INSTANT;
+SELECT cid, pref, note, fixed FROM nb5 ORDER BY cid;
+DROP TABLE nb5;
+
+--echo # and a table that already holds a variable-length column stays instant too
+CREATE TABLE nb6 (cid INT PRIMARY KEY, pref INT, v VARCHAR(10)) ENGINE=TidesDB;
+INSERT INTO nb6 VALUES (10, 1, 'hello'), (11, NULL, 'world');
+ALTER TABLE nb6 ADD COLUMN note VARCHAR(5), ALGORITHM=INSTANT;
+SELECT cid, pref, v, note FROM nb6 ORDER BY cid;
+DROP TABLE nb6;
+
+--source ../include/cleanup_tidesdb.inc
+--echo # Done.

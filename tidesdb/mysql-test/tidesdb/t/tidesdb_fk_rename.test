@@ -1,0 +1,111 @@
+--source ../include/have_tidesdb.inc
+
+#
+# A renamed table keeps its foreign keys.
+#
+# The engine's own catalog addresses a table by column-family name, and carries the database and
+# table names the cascade path matches open tables by.  A rename changes all of those, so unless
+# the catalog is rewritten the constraint is left addressing a name nothing answers to and simply
+# stops being enforced -- with the server still reporting it in SHOW CREATE TABLE, which is the
+# part that makes it dangerous.
+#
+# ALTER TABLE reaches the same path, because the copy algorithm builds the new table under a
+# temporary name and renames it into place.  So an ALTER that adds a constraint, and any ALTER at
+# all on a table that already has one, both depend on this.
+#
+
+--echo #
+--echo # TEST 1: renaming the child
+--echo #
+
+CREATE TABLE rn_p (id INT PRIMARY KEY) ENGINE=TidesDB;
+CREATE TABLE rn_c (cid INT PRIMARY KEY, pref INT, KEY pref_idx (pref),
+  CONSTRAINT fk_rn FOREIGN KEY (pref) REFERENCES rn_p (id)) ENGINE=TidesDB;
+INSERT INTO rn_p VALUES (1);
+INSERT INTO rn_c VALUES (10, 1);
+
+RENAME TABLE rn_c TO rn_c2;
+
+--echo # a dangling reference is still refused after the rename
+--error ER_NO_REFERENCED_ROW_2
+INSERT INTO rn_c2 VALUES (11, 999);
+--echo # and a valid one still accepted
+INSERT INTO rn_c2 VALUES (12, 1);
+--echo # the parent side followed too, so a referenced parent row is still protected
+--error ER_ROW_IS_REFERENCED_2
+DELETE FROM rn_p WHERE id = 1;
+SELECT * FROM rn_c2 ORDER BY cid;
+DROP TABLE rn_c2, rn_p;
+
+--echo #
+--echo # TEST 2: renaming the parent
+--echo #
+
+CREATE TABLE rp_p (id INT PRIMARY KEY) ENGINE=TidesDB;
+CREATE TABLE rp_c (cid INT PRIMARY KEY, pref INT, KEY pref_idx (pref),
+  CONSTRAINT fk_rp FOREIGN KEY (pref) REFERENCES rp_p (id)) ENGINE=TidesDB;
+INSERT INTO rp_p VALUES (1);
+INSERT INTO rp_c VALUES (10, 1);
+
+RENAME TABLE rp_p TO rp_p2;
+
+--echo # the child probes the parent's new name, so a dangling reference is still refused
+--error ER_NO_REFERENCED_ROW_2
+INSERT INTO rp_c VALUES (11, 999);
+INSERT INTO rp_c VALUES (12, 1);
+--echo # and the renamed parent still blocks a delete its child depends on
+--error ER_ROW_IS_REFERENCED_2
+DELETE FROM rp_p2 WHERE id = 1;
+SELECT * FROM rp_c ORDER BY cid;
+DROP TABLE rp_c, rp_p2;
+
+--echo #
+--echo # TEST 3: a self-reference names the table on both sides
+--echo #
+
+CREATE TABLE sr (id INT PRIMARY KEY, parent_id INT, KEY p_idx (parent_id),
+  CONSTRAINT fk_sr FOREIGN KEY (parent_id) REFERENCES sr (id)) ENGINE=TidesDB;
+INSERT INTO sr VALUES (1, NULL), (2, 1);
+
+RENAME TABLE sr TO sr2;
+
+--error ER_NO_REFERENCED_ROW_2
+INSERT INTO sr2 VALUES (3, 999);
+INSERT INTO sr2 VALUES (4, 2);
+--error ER_ROW_IS_REFERENCED_2
+DELETE FROM sr2 WHERE id = 2;
+SELECT * FROM sr2 ORDER BY id;
+DROP TABLE sr2;
+
+--echo #
+--echo # TEST 4: ALTER TABLE adds a constraint that is actually enforced
+--echo #
+
+CREATE TABLE al_p (id INT PRIMARY KEY) ENGINE=TidesDB;
+CREATE TABLE al_c (cid INT PRIMARY KEY, pref INT, KEY pref_idx (pref)) ENGINE=TidesDB;
+INSERT INTO al_p VALUES (1);
+
+ALTER TABLE al_c ADD CONSTRAINT fk_al FOREIGN KEY (pref) REFERENCES al_p (id);
+
+--echo # the constraint the server now reports is one the engine enforces
+--error ER_NO_REFERENCED_ROW_2
+INSERT INTO al_c VALUES (11, 999);
+INSERT INTO al_c VALUES (10, 1);
+--error ER_ROW_IS_REFERENCED_2
+DELETE FROM al_p WHERE id = 1;
+SELECT * FROM al_c ORDER BY cid;
+
+--echo #
+--echo # TEST 5: an unrelated ALTER on a table that already has one keeps it
+--echo #
+
+ALTER TABLE al_c ADD COLUMN note INT NOT NULL DEFAULT 0;
+--error ER_NO_REFERENCED_ROW_2
+INSERT INTO al_c VALUES (13, 999, 7);
+INSERT INTO al_c VALUES (14, 1, 8);
+--echo # the row written before the ALTER still holds the value it was given
+SELECT cid, pref, note FROM al_c ORDER BY cid;
+DROP TABLE al_c, al_p;
+
+--source ../include/cleanup_tidesdb.inc
+--echo # Done.

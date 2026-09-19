@@ -58,10 +58,10 @@ storage engine has for a verb. Neither form reads or rewrites a single row.
 
 ```sql
 -- give encryption key 1 a new version; rows written from now on use it
-SET GLOBAL tidesdb_rotate_table_key = 1;
+SELECT tidesdb_rotate_table_key(1);
 
 -- mint a new master key and re-wrap every stored table key under it
-SET GLOBAL tidesdb_rotate_master_key = ON;
+SELECT tidesdb_rotate_master_key();
 ```
 
 Rotating a **table key** mints the next version for that key id. Rows already written keep
@@ -73,8 +73,9 @@ keys change; the rows do not. If the keyring refuses, or a re-wrap fails, the pr
 is left in place and the stored keys are unchanged, so a failed rotation leaves the database
 exactly as it was.
 
-`tidesdb_rotate_master_key` reports `OFF` again once the rotation is done: it names an action, not
-a state.
+Both are functions rather than settings, because each names an action rather than a state: there is
+no configuration left behind for a later `SHOW VARIABLES` to report. Each answers `OK`, and a
+rotation that fails fails the statement with the reason.
 
 ## Enabling encryption on an existing table
 

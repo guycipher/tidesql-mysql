@@ -5,7 +5,7 @@
 # Every encrypted row stores the key version it was written under, so a
 # row encrypted before a rotation still decrypts with its original key
 # instead of the current latest one.  The engine owns the keys here, and a
-# rotation is asked for through SET GLOBAL tidesdb_rotate_table_key, which mints
+# rotation is asked for through tidesdb_rotate_table_key(), which mints
 # the next version of that key without reading or rewriting a single row.
 #
 
@@ -19,7 +19,7 @@ SELECT * FROM enc ORDER BY id;
 --echo #
 --echo # rotate the key, then write rows under key version 2
 --echo #
-SET GLOBAL tidesdb_rotate_table_key = 1;
+SELECT tidesdb_rotate_table_key(1) AS rotated;
 INSERT INTO enc VALUES (3,'written under version two'),(4,'also version two');
 
 --echo # all four rows decrypt, the first two under v1 and the rest under v2
@@ -28,7 +28,7 @@ SELECT * FROM enc ORDER BY id;
 --echo #
 --echo # rotate again and confirm all three key vintages still read back
 --echo #
-SET GLOBAL tidesdb_rotate_table_key = 1;
+SELECT tidesdb_rotate_table_key(1) AS rotated;
 INSERT INTO enc VALUES (5,'written under version three');
 SELECT * FROM enc ORDER BY id;
 
@@ -39,7 +39,7 @@ FLUSH TABLES;
 SELECT * FROM enc ORDER BY id;
 
 DROP TABLE enc;
-SET GLOBAL tidesdb_rotate_table_key = DEFAULT;
+
 
 --source ../include/cleanup_tidesdb.inc
 --source ../include/cleanup_tidesdb_encryption.inc

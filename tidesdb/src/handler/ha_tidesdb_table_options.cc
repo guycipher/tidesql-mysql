@@ -28,8 +28,6 @@
 
 #include <string>
 
-#include "dd/types/column.h"
-#include "dd/types/table.h"
 #include "ha_tidesdb.h"
 #include "sql_class.h"
 #include "src/engine/ha_tidesdb_config.h"
@@ -94,55 +92,46 @@ bool tdb_table_options_error(const TABLE *tbl, std::string *error)
     return false;
 }
 
-bool tdb_field_is_ttl_source(const void *dd_table_def, const TABLE *tbl, uint field_index)
+bool tdb_field_is_ttl_source(const TABLE *tbl, uint field_index)
 {
-    const dd::Table *def = static_cast<const dd::Table *>(dd_table_def);
-    if (!def || !tbl || !tbl->s || field_index >= tbl->s->fields) return false;
+    if (!tbl || !tbl->s || field_index >= tbl->s->fields) return false;
 
     const Field *field = tbl->s->field[field_index];
-    if (!field || !field->field_name) return false;
+    if (!field) return false;
 
-    /* The dictionary carries columns the table does not, generated ones among them, so the column
-       is found by name rather than by position. */
-    for (const dd::Column *col : def->columns())
+    const LEX_CSTRING &attr = field->m_engine_attribute;
+    if (!attr.str || attr.length == 0) return false;
+
+    bool is_ttl = false;
+    std::string error;
+    if (!tidesdb::table_options::parse_column_attributes(attr.str, attr.length, &is_ttl, &error))
     {
-        if (!col || my_strcasecmp(system_charset_info, col->name().c_str(), field->field_name) != 0)
-            continue;
-
-        const dd::String_type attr(col->engine_attribute().str, col->engine_attribute().str
-                                                                    ? col->engine_attribute().length
-                                                                    : 0);
-        bool is_ttl = false;
-        std::string error;
-        if (!tidesdb::table_options::parse_column_attributes(attr.data(), attr.size(), &is_ttl,
-                                                             &error))
-        {
-            sql_print_warning("[TIDESDB] column '%s' has an attribute this build cannot read (%s); "
-                              "it is not treated as the row expiry source",
-                              field->field_name, error.c_str());
-            return false;
-        }
-        return is_ttl;
+        sql_print_warning("[TIDESDB] column '%s' has an attribute this build cannot read (%s); "
+                          "it is not treated as the row expiry source",
+                          field->field_name ? field->field_name : "?", error.c_str());
+        return false;
     }
-    return false;
+    return is_ttl;
 }
 
-bool tdb_column_options_error(const void *dd_table_def, std::string *error)
+bool tdb_column_options_error(const TABLE *tbl, std::string *error)
 {
-    const dd::Table *def = static_cast<const dd::Table *>(dd_table_def);
-    if (!def) return true;
+    if (!tbl || !tbl->s) return true;
 
     int ttl_columns = 0;
-    for (const dd::Column *col : def->columns())
+    for (uint i = 0; i < tbl->s->fields; i++)
     {
-        if (!col || !col->engine_attribute().str || col->engine_attribute().length == 0) continue;
+        const Field *col = tbl->s->field[i];
+        if (!col || !col->m_engine_attribute.str || col->m_engine_attribute.length == 0) continue;
 
         bool is_ttl = false;
         std::string why;
         if (!tidesdb::table_options::parse_column_attributes(
-                col->engine_attribute().str, col->engine_attribute().length, &is_ttl, &why))
+                col->m_engine_attribute.str, col->m_engine_attribute.length, &is_ttl, &why))
         {
-            if (error) *error = "column '" + std::string(col->name().c_str()) + "': " + why;
+            if (error)
+                *error =
+                    "column '" + std::string(col->field_name ? col->field_name : "?") + "': " + why;
             return false;
         }
         if (is_ttl) ttl_columns++;
@@ -156,6 +145,80 @@ bool tdb_column_options_error(const void *dd_table_def, std::string *error)
         return false;
     }
     return true;
+}
+
+/* the meta key one index's shape is stored under, prefix then the index name */
+static std::string tdb_key_shape_meta_key(const std::string &index_name)
+{
+    std::string k((const char *)KEYSHAPE_META_PREFIX, KEYSHAPE_META_PREFIX_LEN);
+    k.append(index_name);
+    return k;
+}
+
+void tdb_key_shape_store(tidesdb_column_family_t *data_cf, const std::string &index_name,
+                         const KEY *key_info)
+{
+    if (!data_cf || !key_info || index_name.empty() || !tdb_global) return;
+
+    std::string val;
+    val.push_back((char)KEYSHAPE_VERSION);
+    const uint16 n = (uint16)key_info->user_defined_key_parts;
+    val.push_back((char)(n & 0xff));
+    val.push_back((char)((n >> 8) & 0xff));
+    for (uint p = 0; p < n; p++)
+    {
+        const Field *f = key_info->key_part[p].field;
+        val.push_back((char)(f && TDB_FIELD_IS_NULLABLE(f) ? 1 : 0));
+    }
+
+    const std::string key = tdb_key_shape_meta_key(index_name);
+
+    tidesdb_txn_t *txn = NULL;
+    if (tidesdb_txn_begin(tdb_global, &txn) != TDB_SUCCESS) return;
+
+    if (tidesdb_txn_put(txn, data_cf, (const uint8_t *)key.data(), key.size(),
+                        (const uint8_t *)val.data(), val.size(), TIDESDB_TTL_NONE) == TDB_SUCCESS)
+        (void)tidesdb_txn_commit(txn);
+    else
+        (void)tidesdb_txn_rollback(txn);
+
+    tidesdb_txn_free(txn);
+}
+
+bool tdb_key_shape_load(tidesdb_column_family_t *data_cf, const std::string &index_name,
+                        std::vector<uint8> *out)
+{
+    if (!out) return false;
+    out->clear();
+    if (!data_cf || index_name.empty() || !tdb_global) return false;
+
+    const std::string key = tdb_key_shape_meta_key(index_name);
+
+    tidesdb_txn_t *txn = NULL;
+    if (tidesdb_txn_begin(tdb_global, &txn) != TDB_SUCCESS) return false;
+
+    uint8_t *val = NULL;
+    size_t vlen = 0;
+    tdb_owned_buf vg(val);
+    const bool found = tidesdb_txn_get(txn, data_cf, (const uint8_t *)key.data(), key.size(), &val,
+                                       &vlen) == TDB_SUCCESS &&
+                       val && vlen >= 3;
+
+    bool ok = false;
+    if (found && val[0] == KEYSHAPE_VERSION)
+    {
+        const uint16 n = (uint16)(val[1] | (val[2] << 8));
+        if (vlen >= (size_t)3 + n)
+        {
+            for (uint16 i = 0; i < n; i++) out->push_back(val[3 + i]);
+            ok = true;
+        }
+    }
+
+    (void)tidesdb_txn_rollback(txn);
+    tidesdb_txn_free(txn);
+    if (!ok) out->clear();
+    return ok;
 }
 
 void tdb_table_options_store(tidesdb_column_family_t *cf, const ha_table_option_struct *opts)

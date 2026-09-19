@@ -43,7 +43,7 @@
   via move_field_offset to read from the correct buffer.
 */
 uint ha_tidesdb::make_comparable_key(KEY *key_info, const uchar *record, uint num_parts, uchar *out,
-                                     bool for_fk_ref)
+                                     const std::vector<uint8> *fk_ref_nullable)
 {
     uint pos = 0;
     my_ptrdiff_t ptrdiff = (my_ptrdiff_t)(record - table->record[0]);
@@ -68,10 +68,18 @@ uint ha_tidesdb::make_comparable_key(KEY *key_info, const uchar *record, uint nu
            Handling the null indicator ourselves and calling sort_string()
            directly avoids this mismatch. */
         field->move_field_offset(ptrdiff);
-        /* A foreign-key reference key omits the null indicator so it matches the
-           non-nullable parent primary key it probes.  The caller guarantees the
-           referencing columns are non-null before asking for such a key. */
-        if (TDB_FIELD_IS_NULLABLE(field) && !for_fk_ref)
+        /* A foreign-key reference key is encoded to match the parent key it probes, not this
+           table's own index, and the two need not agree on nullability -- a NOT NULL child column
+           may reference a nullable unique key, and the reverse happens too.  So the indicator is
+           written where the parent wrote one, which is what fk_ref_nullable records, and it is
+           always NOT_NULL because the caller skips the probe when any referencing column is null.
+           An empty vector means the parent key has no nullable part and the key is value-only. */
+        if (fk_ref_nullable != nullptr)
+        {
+            if (p < fk_ref_nullable->size() && (*fk_ref_nullable)[p])
+                out[pos++] = SORT_KEY_NOT_NULL;
+        }
+        else if (TDB_FIELD_IS_NULLABLE(field))
         {
             if (field->is_null())
             {

@@ -1,4 +1,4 @@
-CALL mtr.add_suppression("\\[TIDESDB\\] Backup to .* failed");
+CALL mtr.add_suppression("\\[TIDESDB\\] backup to .* failed");
 #
 # ============================================
 # TEST 1: Online backup creates a valid copy
@@ -14,13 +14,12 @@ id	val
 1	alpha
 2	beta
 3	gamma
-# Triggering online backup
-# Backup should have created the directory
-Backup directory exists: YES
-# Check that SHOW VARIABLES reflects the backup path
-SELECT @@GLOBAL.tidesdb_backup_dir IS NOT NULL AS backup_dir_set;
-backup_dir_set
-1
+# Taking the backup.  The function answers OK, so a failure fails this statement
+# rather than being left in the error log for someone to find.
+backup
+OK
+# Backup should have created the directory.  file_exists fails the test if it
+# is not there, rather than printing a NO that a recorded result would accept.
 # Insert more data after backup (should NOT appear in backup)
 INSERT INTO t_backup VALUES (4, 'delta'), (5, 'epsilon');
 SELECT COUNT(*) AS rows_after FROM t_backup;
@@ -34,19 +33,19 @@ DROP TABLE t_backup;
 #
 # TidesDB 10 writes a fresh consistent snapshot into the directory, so
 # re-running a backup into a directory that already holds one succeeds.
-SET GLOBAL tidesdb_backup_dir = 'MYSQLTEST_VARDIR/tmp/tidesdb_backup_test';
-SELECT @@GLOBAL.tidesdb_backup_dir IS NOT NULL AS backup_dir_set;
-backup_dir_set
-1
+backup_again
+OK
+# (succeeded -- the statement would have failed otherwise)
 #
 # ============================================
-# TEST 3: Clear backup_dir variable
+# TEST 3: A backup with no destination is refused
 # ============================================
 #
-SET GLOBAL tidesdb_backup_dir = '';
-SELECT @@GLOBAL.tidesdb_backup_dir IS NULL AS backup_dir_cleared;
-backup_dir_cleared
-1
+SELECT tidesdb_backup('');
+ERROR HY000: [TIDESDB] tidesdb_backup() needs a destination path
+# and the wrong argument shape is refused before anything runs
+SELECT tidesdb_backup();
+ERROR HY000: Can't initialize function 'tidesdb_backup'; tidesdb_backup() takes one string argument
 #
 # ============================================
 # TEST 4: Concurrent reads/writes during backup
@@ -60,6 +59,8 @@ data VARCHAR(200)
 SELECT COUNT(*) AS before_backup FROM t_concurrent;
 before_backup
 100
+backup
+OK
 # Backup completed while table was loaded
 SELECT COUNT(*) AS after_backup FROM t_concurrent;
 after_backup
@@ -94,5 +95,4 @@ DROP TABLE t_export;
 #
 # === Cleanup ===
 #
-SET GLOBAL tidesdb_backup_dir = '';
 # Done.

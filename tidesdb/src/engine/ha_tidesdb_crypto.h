@@ -183,4 +183,19 @@ int tdb_crypto_rotate_master_key();
  */
 int tdb_crypto_rotate_table_key(unsigned int key_id);
 
+/**
+ * tdb_udf_register_all
+ * register the engine's administrative functions -- backup, checkpoint and key rotation
+ *
+ * Called once at plugin init.  A registration that fails is logged and skipped; the engine stores
+ * and serves data without it.
+ */
+void tdb_udf_register_all();
+
+/**
+ * tdb_udf_unregister_all
+ * take them back out again, at plugin shutdown
+ */
+void tdb_udf_unregister_all();
+
 #endif /* HA_TIDESDB_CRYPTO_H */

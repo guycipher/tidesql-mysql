@@ -37,15 +37,11 @@ is the default new sessions inherit).
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `tidesdb_backup_dir` | (empty) | Set to a path to trigger an online backup. Clear with an empty string. See [Backup](/administration/backup) |
-| `tidesdb_checkpoint_dir` | (empty) | Set to a path to make the live database durable and write a copy of it there. Clear with an empty string. See [Backup and Checkpoint](/administration/backup) |
 | `tidesdb_fts_min_word_len` | 3 | Minimum word length in characters for full-text indexing |
 | `tidesdb_fts_max_word_len` | 84 | Maximum word length in characters for full-text indexing |
 | `tidesdb_fts_bm25_k1` | 1.2 | BM25 k1 parameter, term-frequency saturation |
 | `tidesdb_fts_bm25_b` | 0.75 | BM25 b parameter, document-length normalization from 0 to 1 |
 | `tidesdb_fts_blend_chars` | (empty) | Characters treated as both separators and word characters. Set to `'` for Italian and French elision. See [Full-Text Search](/reference/full-text-search) |
-| `tidesdb_rotate_table_key` | 0 | Set to an encryption key id to give that key a new version. Rows written afterwards use it; rows already written keep decrypting under the version they were written with, and none are read or rewritten. 0 asks for nothing. See [Data-at-Rest Encryption](/reference/encryption) |
-| `tidesdb_rotate_master_key` | OFF | Set to ON to mint a new master key and re-wrap every stored table key under it. No row is read or rewritten. Reports OFF again once the rotation is done |
 | `tidesdb_ft_stopword_table` | NULL | Custom stop-word table in `db_name/table_name` form. NULL uses the InnoDB default list, empty string disables stop-word filtering |
 
 ## Session, with a global default
@@ -95,3 +91,19 @@ CREATE TABLE t2 (id INT PRIMARY KEY) ENGINE=TIDESDB
 -- change a default for this session only
 SET SESSION tidesdb_default_bloom_fpr = 50;
 ```
+
+## Not variables
+
+Backup, checkpoint and encryption-key rotation are functions rather than system variables. Each is
+something the server does once when asked, and none leaves a setting behind that this page could
+report a value for:
+
+| Function | What it does |
+|----------|--------------|
+| `tidesdb_backup(path)` | Writes a consistent, directly-openable copy of the data directory. See [Backup and Checkpoint](/administration/backup) |
+| `tidesdb_checkpoint(path)` | Makes the live database durable, then writes that copy. See [Backup and Checkpoint](/administration/backup) |
+| `tidesdb_rotate_table_key(key_id)` | Gives an encryption key a new version. Rows written afterwards use it; rows already written keep decrypting under the version they were written with, and none are read or rewritten. See [Data-at-Rest Encryption](/reference/encryption) |
+| `tidesdb_rotate_master_key()` | Mints a new master key and re-wraps every stored table key under it. No row is read or rewritten |
+
+Each answers `OK`, and an operation that fails fails the statement with the reason, so a caller
+sees the outcome directly instead of looking for it in the error log.

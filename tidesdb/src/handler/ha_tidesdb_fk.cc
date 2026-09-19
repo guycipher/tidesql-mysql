@@ -23,12 +23,12 @@
   So this engine keeps its own catalog of the constraints, loads it on both sides
   at open, and runs the referential checks inside its own row operations.
 
-  This first cut enforces the common shape where the referenced columns are the
-  parent primary key.  It rejects a child row whose referenced parent key is
-  absent, and it blocks a delete or update of a parent row while a child still
-  references it.  Cascade and set-null actions, and references to a non-primary
-  unique key, are recorded and reported but fall back to the restrict behaviour
-  until the follow-up increment wires the child-handler rewrite path.
+  A child row whose referenced parent key is absent is rejected, and a delete or update of a parent
+  row a child still references is either blocked or followed into the child, depending on the
+  constraint's ON DELETE and ON UPDATE actions -- RESTRICT, NO ACTION, CASCADE and SET NULL are all
+  carried out here.  The referenced columns may be the parent's primary key or any unique key,
+  whether or not its columns are nullable; a foreign key column declared descending is the one shape
+  still refused, because the child match is built on a forward sort key.
 */
 
 #include "ha_tidesdb.h"
@@ -40,8 +40,12 @@
 #include <vector>
 
 #include "key.h"
+/* native_strcasecmp -- the server's portable spelling; plain strcasecmp is POSIX-only and MSVC
+   has no such name. */
+#include "m_string.h"
 #include "sql_class.h"
 #include "sql_table.h"
+#include "src/core/cf_name.h"
 #include "src/handler/ha_tidesdb_internal.h"
 
 /* The engine keeps every table's foreign keys in one internal column family.
@@ -51,7 +55,9 @@
 static constexpr const char FK_CATALOG_CF[] = "__tidesdb_fk_catalog";
 static constexpr uint8_t FK_REC_CHILD = 'c';
 static constexpr uint8_t FK_REC_PARENT = 'p';
-static constexpr uint8_t FK_SER_VERSION = 1;
+/* The catalog record format.  One format is current, and a record written by any other is refused
+   rather than guessed at, which fk_load reports rather than passing over in silence. */
+static constexpr uint8_t FK_SER_VERSION = 2;
 
 /* ---- small serialization helpers -------------------------------------- */
 
@@ -111,8 +117,9 @@ struct fk_catalog_entry
     std::string parent_cf;
     std::vector<std::string> ref_columns;
     std::string child_index_name;
-    std::string parent_index_name; /* parent key the fk references, resolved at create */
-    uint8 parent_is_pk;            /* whether that key is the parent primary key      */
+    std::string parent_index_name;      /* parent key the fk references, resolved at create */
+    std::vector<uint8> parent_nullable; /* whether each parent key column is nullable       */
+    uint8 parent_is_pk;                 /* whether that key is the parent primary key       */
     uint8 on_delete;
     uint8 on_update;
 };
@@ -139,6 +146,10 @@ static void fk_serialize(const fk_catalog_entry &e, std::string &out)
     out.push_back((char)(nn & 0xff));
     out.push_back((char)((nn >> 8) & 0xff));
     for (uint8 b : e.child_nullable) out.push_back((char)b);
+    uint16 pn = (uint16)e.parent_nullable.size();
+    out.push_back((char)(pn & 0xff));
+    out.push_back((char)((pn >> 8) & 0xff));
+    for (uint8 b : e.parent_nullable) out.push_back((char)b);
 }
 
 static bool fk_deserialize(const uint8_t *p, size_t len, fk_catalog_entry &e)
@@ -166,6 +177,11 @@ static bool fk_deserialize(const uint8_t *p, size_t len, fk_catalog_entry &e)
     p += 2;
     if (p + nn > end) return false;
     for (uint16 i = 0; i < nn; i++) e.child_nullable.push_back(*p++);
+    if (p + 2 > end) return false;
+    uint16 pn = (uint16)(p[0] | (p[1] << 8));
+    p += 2;
+    if (p + pn > end) return false;
+    for (uint16 i = 0; i < pn; i++) e.parent_nullable.push_back(*p++);
     return true;
 }
 
@@ -240,27 +256,121 @@ static int fk_field_index(TABLE *table, const std::string &col)
     return -1;
 }
 
-/* Read the referenced parent table's frm off the table-definition cache and
-   without any metadata lock, to learn which key the foreign key references,
-   whether that key is the parent primary key, and whether its columns are
-   nullable.  init_tmp_table_share plus open_table_def is the same lock-free frm
-   peek the server uses to read a table's keys by name.  Returns true when the
-   parent was read and a matching primary or unique key was found. */
+/* ---- rename-time fixup ------------------------------------------------- */
+
+/* The catalog addresses a table by its column-family name, in the record keys on both sides and in
+   the records themselves, and it carries the database and table names the cascade path matches open
+   tables by.  A rename changes all of those at once, so every record naming the table has to be
+   rewritten and re-keyed, or it is left addressing a name nothing answers to: the renamed table's
+   own load finds no constraint and stops enforcing it, and a table referencing the renamed one
+   probes a column family that no longer exists.  ALTER TABLE reaches this too, since the copy
+   algorithm builds the new table under a temporary name and renames it into place. */
+/* static */
+int ha_tidesdb::fk_rename_catalog(const char *from, const char *to)
+{
+    const std::string old_cf = path_to_cf_name(from);
+    const std::string new_cf = path_to_cf_name(to);
+    if (old_cf == new_cf) return 0;
+
+    tidesdb_column_family_t *cf = tidesdb_get_column_family(tdb_global, FK_CATALOG_CF);
+    if (!cf) return 0;
+
+    /* The catalog holds the names the server knows the table by, which are not the names its path
+       spells -- a character the filesystem cannot take is encoded on the way out.  Decoding brings
+       back what an open table's share reports, which is what the cascade path compares against. */
+    const tidesdb::cf_name::table_path dest = tidesdb::cf_name::split_table_path(to);
+    char new_db_buf[FN_REFLEN];
+    char new_table_buf[FN_REFLEN];
+    filename_to_tablename(dest.db.c_str(), new_db_buf, sizeof(new_db_buf));
+    filename_to_tablename(dest.table.c_str(), new_table_buf, sizeof(new_table_buf));
+    const std::string new_db(new_db_buf);
+    const std::string new_table(new_table_buf);
+
+    tidesdb_txn_t *txn = NULL;
+    if (tidesdb_txn_begin(tdb_global, &txn) != TDB_SUCCESS) return 0;
+
+    /* Each constraint is stored twice, under a child-side key and a parent-side key, with the same
+       record under both.  Materializing only the child-side copy visits each constraint once, and
+       both keys are rebuilt from the record either way. */
+    std::vector<std::string> stale_keys;
+    std::vector<std::pair<std::string, std::string>> fresh;
+    tidesdb_iter_t *it = NULL;
+    if (tidesdb_iter_new(txn, cf, &it) == TDB_SUCCESS && it)
+    {
+        const uint8_t lo0 = 0;
+        tidesdb_iter_seek(it, &lo0, 1);
+        while (tidesdb_iter_valid(it))
+        {
+            uint8_t *k = NULL, *v = NULL;
+            size_t ks = 0, vs = 0;
+            if (tidesdb_iter_key(it, &k, &ks) == TDB_SUCCESS &&
+                tidesdb_iter_value(it, &v, &vs) == TDB_SUCCESS)
+            {
+                fk_catalog_entry e;
+                if (ks > 0 && k[0] == FK_REC_CHILD && fk_deserialize(v, vs, e) &&
+                    (e.child_cf == old_cf || e.parent_cf == old_cf))
+                {
+                    stale_keys.push_back(fk_child_key(e.child_cf, e.name));
+                    stale_keys.push_back(fk_parent_key(e.parent_cf, e.child_cf, e.name));
+
+                    /* A self-reference names the table on both sides and updates both. */
+                    if (e.child_cf == old_cf)
+                    {
+                        e.child_cf = new_cf;
+                        e.child_db = new_db;
+                        e.child_table = new_table;
+                    }
+                    if (e.parent_cf == old_cf)
+                    {
+                        e.parent_cf = new_cf;
+                        e.ref_db = new_db;
+                        e.ref_table = new_table;
+                    }
+
+                    std::string val;
+                    fk_serialize(e, val);
+                    fresh.emplace_back(fk_child_key(e.child_cf, e.name), val);
+                    fresh.emplace_back(fk_parent_key(e.parent_cf, e.child_cf, e.name), val);
+                }
+                tidesdb_free(k);
+                tidesdb_free(v);
+            }
+            tidesdb_iter_next(it);
+        }
+        tidesdb_iter_free(it);
+    }
+
+    /* Every stale key goes before any fresh one.  A constraint where only one side was renamed
+       keeps one of its two keys unchanged, and writing after deleting is what leaves that key
+       holding the updated record rather than nothing. */
+    for (const auto &k : stale_keys)
+        tidesdb_txn_delete(txn, cf, (const uint8_t *)k.data(), k.size());
+    for (const auto &kv : fresh)
+        tidesdb_txn_put(txn, cf, (const uint8_t *)kv.first.data(), kv.first.size(),
+                        (const uint8_t *)kv.second.data(), kv.second.size(), TIDESDB_TTL_NONE);
+
+    if (tidesdb_txn_commit(txn) != TDB_SUCCESS)
+    {
+        tidesdb_txn_rollback(txn);
+        tidesdb_txn_free(txn);
+        sql_print_error("[TIDESDB] could not move the foreign-key catalog from '%s' to '%s'; "
+                        "constraints on the renamed table are NOT enforced until it is recreated",
+                        old_cf.c_str(), new_cf.c_str());
+        return HA_ERR_GENERIC;
+    }
+    tidesdb_txn_free(txn);
+    return 0;
+}
 
 /* ---- create-time persistence ------------------------------------------ */
 
-int ha_tidesdb::fk_persist_defs(const char *path, TABLE *table_arg, HA_CREATE_INFO *create_info,
-                                const void *dd_table_def)
+int ha_tidesdb::fk_persist_defs(const char *path, TABLE *table_arg, HA_CREATE_INFO *create_info)
 {
-    /* Where the constraints come from is the one server-specific part of this; tdb_fk_extract_specs
-       hands them back in the same shape whichever server described them. */
     std::vector<tdb_fk_spec> specs;
-    if (!tdb_fk_extract_specs(ha_thd(), table_arg, create_info, dd_table_def, specs))
-        return HA_ERR_GENERIC;
+    if (!tdb_fk_extract_specs(ha_thd(), table_arg, create_info, specs)) return HA_ERR_GENERIC;
     if (specs.empty()) return 0;
 
     const std::string child_cf = path_to_cf_name(path);
-    THD *thd = ha_thd();
 
     std::vector<std::pair<std::string, std::string>> records; /* key, value */
     uint anon = 0;
@@ -334,31 +444,23 @@ int ha_tidesdb::fk_persist_defs(const char *path, TABLE *table_arg, HA_CREATE_IN
                 return HA_ERR_UNSUPPORTED;
             }
 
-        /* Resolve which parent key the constraint references so the child probe targets the right
-           place, the parent data family for a primary key or the parent index family for a unique
-           key.  If the parent definition cannot be read we assume the primary key, the historical
-           behaviour. */
-        e.parent_is_pk = 1;
-        bool p_is_pk = true, p_has_nullable = false;
-        std::string p_index;
-        if (tdb_fk_resolve_parent_index(thd, e.ref_db, e.ref_table, e.ref_columns, p_is_pk, p_index,
-                                        p_has_nullable))
-        {
-            e.parent_is_pk = p_is_pk ? 1 : 0;
-            e.parent_index_name = p_index;
-            /* A referenced unique index whose columns are nullable stores a null indicator the
-               value-only child probe would not reproduce, so reject that rare shape rather than
-               enforce it incorrectly. */
-            if (!p_is_pk && p_has_nullable)
-            {
-                my_printf_error(
-                    ER_CANT_CREATE_TABLE,
-                    "TidesDB foreign key %s must reference a NOT NULL unique key or the "
-                    "primary key",
-                    MYF(0), e.name.c_str());
-                return HA_ERR_UNSUPPORTED;
-            }
-        }
+        /* Which parent key the constraint references decides where the child probes: the parent's
+           data family for a primary key, its index family for a unique key.  The server resolved
+           that already and named the key on the share.  A parent key it could not resolve leaves
+           the name empty, and the primary key is assumed, which is the historical behaviour. */
+        e.parent_index_name = spec.parent_index_name;
+        e.parent_is_pk = (e.parent_index_name.empty() ||
+                          native_strcasecmp(e.parent_index_name.c_str(), TDB_PRIMARY_KEY_NAME) == 0)
+                             ? 1
+                             : 0;
+
+        /* A unique key with a nullable column stores an indicator byte in front of it, so the probe
+           has to write one too.  The parent recorded which of its parts carry one when it built the
+           index family, and that is what gets read here -- the convention the stored keys were
+           actually written under.  A primary key needs no lookup: its columns cannot be nullable,
+           so the empty vector left here is already correct for it. */
+        if (!e.parent_is_pk)
+            (void)tdb_fk_parent_key_shape(e.parent_cf, e.parent_index_name, e.parent_nullable);
 
         std::string val;
         fk_serialize(e, val);
@@ -469,7 +571,20 @@ void ha_tidesdb::fk_load()
                 /* only the child-side record is materialized, so each constraint
                    is considered once even though it is stored on both sides */
                 fk_catalog_entry e;
-                if (ks > 0 && k[0] == FK_REC_CHILD && fk_deserialize(v, vs, e))
+                bool readable = false;
+                if (ks > 0 && k[0] == FK_REC_CHILD)
+                {
+                    readable = fk_deserialize(v, vs, e);
+                    /* A record this build cannot read would otherwise be passed over, and the
+                       constraint would stop being enforced with nothing said about it. */
+                    if (!readable)
+                        sql_print_error(
+                            "[TIDESDB] a foreign-key catalog record is in a format this "
+                            "build does not read; the constraint it describes is NOT "
+                            "enforced on '%s'",
+                            self.c_str());
+                }
+                if (readable)
                 {
                     if (e.child_cf == self)
                     {
@@ -483,6 +598,7 @@ void ha_tidesdb::fk_load()
                         d.parent_cf = e.parent_cf;
                         d.child_index_name = e.child_index_name;
                         d.parent_index_name = e.parent_index_name;
+                        d.parent_nullable = e.parent_nullable;
                         d.ref_column_names = e.ref_columns;
                         d.child_nullable = e.child_nullable;
                         d.on_delete = e.on_delete;
@@ -574,9 +690,12 @@ int ha_tidesdb::fk_check_child(const uchar *new_row)
             }
         if (any_null) continue;
 
-        /* Encode value-only so the probe matches the non-nullable parent key. */
+        /* Encode the way the parent encoded its key, which carries an indicator byte for each
+           column the parent declared nullable and none for the rest.  The child's own nullability
+           has no say here -- the two tables are free to differ -- and the indicator is always
+           NOT_NULL because the MATCH SIMPLE check above skipped the row if any value were null. */
         uchar comp[MAX_KEY_LENGTH];
-        uint comp_len = make_comparable_key(ki, new_row, nparts, comp, true);
+        uint comp_len = make_comparable_key(ki, new_row, nparts, comp, &d.parent_nullable);
 
         bool present = false;
         if (d.parent_is_pk)

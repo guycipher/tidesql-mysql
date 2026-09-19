@@ -616,6 +616,26 @@ static int tidesdb_start_consistent_snapshot(TDB_HTON_CB_ARG THD *thd)
     return 0;
 }
 
+tidesdb_txn_t *tdb_stmt_txn_for_ddl(THD *thd)
+{
+    if (!thd || !tdb_global) return nullptr;
+
+    /* A DDL statement touches no rows, so nothing has opened a transaction for it yet.  Opening one
+       here and registering it is what puts the engine in the statement's commit, which is the whole
+       point: the DDL log record written through it lives or dies with the statement. */
+    tidesdb_trx_t *trx = get_or_create_trx(
+        thd, tidesdb_hton, resolve_effective_isolation(thd, TDB_ISOLATION_READ_COMMITTED));
+    if (!trx || !trx->txn) return nullptr;
+
+    trans_register_ha(thd, false, tidesdb_hton, 0);
+    trans_register_ha(thd, true, tidesdb_hton, 0);
+
+    /* The record is a write, so the transaction has to be treated as having one: a transaction left
+       marked clean can be skipped at commit, and the record would never reach storage. */
+    trx->dirty = true;
+    return trx->txn;
+}
+
 /* ******************** Locking ******************** */
 
 /*

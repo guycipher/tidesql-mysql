@@ -175,6 +175,7 @@ SET(TIDESDB_HANDLER_SOURCES
         src/handler/ha_tidesdb_read.cc
         src/handler/ha_tidesdb_txn.cc
         src/engine/ha_tidesdb_config.cc
+        src/engine/ha_tidesdb_udf.cc
         src/engine/ha_tidesdb_status.cc)
 
 # Optimizer cost.  The arithmetic lives in src/core/cost_model; this adapter presents it in the

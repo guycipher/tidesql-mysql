@@ -50,6 +50,19 @@ extern handlerton *tidesdb_hton;
  */
 int tdb_rc_to_ha(int rc, const char *ctx);
 
+/**
+ * tdb_stmt_txn_for_ddl
+ * the transaction a DDL statement's own writes belong in, opened and registered if it has none yet
+ * @param thd the session
+ * @return the statement's transaction, or NULL when one could not be opened
+ *
+ * A DDL statement reads and writes no rows, so nothing else opens a transaction for it.  The DDL
+ * log writes its record through this one so that the server's commit or rollback of the statement
+ * carries the record with it, which is what makes a surviving record proof that the statement
+ * committed.
+ */
+tidesdb_txn_t *tdb_stmt_txn_for_ddl(THD *thd);
+
 /* a one-byte zero value stored for secondary-index entries, whose meaning is carried entirely by
    the key; its address and single-byte size are all that matter, so each translation unit having
    its own copy is fine. */

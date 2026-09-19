@@ -1,0 +1,59 @@
+# ----------------------------------------------------------------------
+# Setup
+# Creating local configuration file for keyring component: component_keyring_file
+# Creating manifest file for current MySQL server instance
+# Re-starting mysql server with manifest file
+# ----------------------------------------------------------------------
+#
+# Write an encrypted table, then take the server down
+#
+CREATE TABLE t_enc_restart (
+id  INT NOT NULL PRIMARY KEY,
+val VARCHAR(100)
+) ENGINE=TIDESDB ENGINE_ATTRIBUTE='{"encrypted": true}';
+INSERT INTO t_enc_restart VALUES (1, 'secret_one'), (2, 'secret_two'), (3, 'secret_three');
+SELECT * FROM t_enc_restart ORDER BY id;
+id	val
+1	secret_one
+2	secret_two
+3	secret_three
+# Restart with the same manifest, so the keyring component comes back with the keys the
+# previous boot wrote to it.
+# Re-starting mysql server with manifest file
+#
+# The rows read back, which means the master key was found under the same name
+#
+SELECT * FROM t_enc_restart ORDER BY id;
+id	val
+1	secret_one
+2	secret_two
+3	secret_three
+# and the table is still declared encrypted.  CREATE_OPTIONS is not where this shows up --
+# the engine takes the flag as an engine attribute, so SHOW CREATE TABLE is what carries it.
+SHOW CREATE TABLE t_enc_restart;
+Table	Create Table
+t_enc_restart	CREATE TABLE `t_enc_restart` (
+  `id` int NOT NULL,
+  `val` varchar(100) COLLATE utf8mb4_general_ci DEFAULT NULL,
+  PRIMARY KEY (`id`)
+) ENGINE=TidesDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci /*!80021 ENGINE_ATTRIBUTE='{"encrypted": true}' */
+#
+# Writes after the restart use the same key and read back too
+#
+INSERT INTO t_enc_restart VALUES (4, 'secret_four');
+UPDATE t_enc_restart SET val = 'updated_after_restart' WHERE id = 2;
+SELECT * FROM t_enc_restart ORDER BY id;
+id	val
+1	secret_one
+2	updated_after_restart
+3	secret_three
+4	secret_four
+DROP TABLE t_enc_restart;
+# ----------------------------------------------------------------------
+# Teardown
+# Removing manifest file for current MySQL server instance
+# Removing local keyring file for keyring component: component_keyring_file
+# Removing local configuration file for keyring component: component_keyring_file
+# Restarting server without the manifest file
+# ----------------------------------------------------------------------
+# Done.

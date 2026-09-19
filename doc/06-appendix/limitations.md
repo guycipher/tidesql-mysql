@@ -65,14 +65,12 @@ level at which a write is a blind overwrite: if another transaction wrote the sa
 write is lost. That is the documented behaviour of the level and the right trade for appending
 independent records, but it is not a level to run read-modify-write traffic at.
 
-**Foreign keys carry two shape restrictions.** TideSQL enforces foreign keys inside the engine,
-including `ON DELETE` and `ON UPDATE` with `CASCADE`, `SET NULL`, and `RESTRICT`, references to a
-primary key or to a non-nullable unique key, and self-references. Two constraint shapes are rejected
-at `CREATE TABLE` and `ALTER TABLE`. A foreign key column declared with descending order is not
-allowed, because the engine matches child rows against a forward sort key. A foreign key that
-references a nullable unique key is not allowed either, because the value-only child probe cannot
-reproduce that key's null indicator. Everything else behaves as in InnoDB. See
-[Foreign Keys](/reference/foreign-keys).
+**A foreign key column cannot be declared descending.** TideSQL enforces foreign keys inside the
+engine, including `ON DELETE` and `ON UPDATE` with `CASCADE`, `SET NULL`, and `RESTRICT`, references
+to a primary key or to a unique key whether or not its columns are nullable, and self-references.
+One constraint shape is rejected at `CREATE TABLE` and `ALTER TABLE`: a foreign key column declared
+with descending order, because the engine matches child rows against a forward sort key. Everything
+else behaves as in InnoDB. See [Foreign Keys](/reference/foreign-keys).
 
 **Changing the primary key or a column type needs a full copy.** The engine does not support an
 inplace primary-key change, and changing a column type such as `INT` to `BIGINT` also rebuilds the

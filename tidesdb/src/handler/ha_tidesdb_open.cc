@@ -266,7 +266,7 @@ void ha_tidesdb::recover_auto_inc_secondary()
 
 /* ******************** open / close / create ******************** */
 
-int ha_tidesdb::open_init_share_columns(const char *name, const void *dd_table_def)
+int ha_tidesdb::open_init_share_columns(const char *name)
 {
     share->cf_name = path_to_cf_name(name);
     share->cf = tidesdb_get_column_family(tdb_global, share->cf_name.c_str());
@@ -325,7 +325,7 @@ int ha_tidesdb::open_init_share_columns(const char *name, const void *dd_table_d
     share->ttl_field_idx = TIDESDB_TTL_FIELD_NONE;
     for (uint i = 0; i < table->s->fields; i++)
     {
-        if (TDB_FIELD_IS_TTL_SOURCE(dd_table_def, table, i))
+        if (TDB_FIELD_IS_TTL_SOURCE(table, i))
         {
             share->ttl_field_idx = (int)i;
             break;
@@ -507,7 +507,7 @@ int ha_tidesdb::open(const char *name, int mode [[maybe_unused]],
     lock_shared_ha_data();
     if (!share->cf)
     {
-        int rc = open_init_share_columns(name, TDB_DD_TABLE_ARG);
+        int rc = open_init_share_columns(name);
         if (rc)
         {
             unlock_shared_ha_data();
@@ -586,7 +586,7 @@ int ha_tidesdb::create(const char *name, TABLE *table_arg,
        and then ignored for the life of the table. */
     std::string opt_error;
     if (!TDB_TABLE_OPTIONS_ERROR(table_arg, &opt_error) ||
-        !TDB_COLUMN_OPTIONS_ERROR(TDB_DD_TABLE_ARG, &opt_error))
+        !TDB_COLUMN_OPTIONS_ERROR(table_arg, &opt_error))
     {
         my_printf_error(ER_ILLEGAL_HA_CREATE_OPTION, "ENGINE_ATTRIBUTE: %s", MYF(0),
                         opt_error.c_str());
@@ -631,6 +631,11 @@ int ha_tidesdb::create(const char *name, TABLE *table_arg,
                                 rc);
                 DBUG_RETURN(tdb_rc_to_ha(rc, "create idx_cf"));
             }
+
+            /* Settle how this family's keys are encoded while the definition that decides it is in
+               hand, so anything rebuilding them later reads the convention rather than guessing. */
+            tdb_key_shape_store(tidesdb_get_column_family(tdb_global, cf_name.c_str()),
+                                TDB_KEY_NAME(&table_arg->key_info[i]), &table_arg->key_info[i]);
         }
     }
 
@@ -642,7 +647,7 @@ int ha_tidesdb::create(const char *name, TABLE *table_arg,
 
     /* Record any foreign keys declared on this table in the engine catalog so
        both sides load them at open and the row operations can enforce them. */
-    if (int frc = fk_persist_defs(name, table_arg, create_info, TDB_DD_TABLE_ARG)) DBUG_RETURN(frc);
+    if (int frc = fk_persist_defs(name, table_arg, create_info)) DBUG_RETURN(frc);
 
     /* The families now exist.  Where DDL is transactional the statement may still roll back, so
        record them; the atomicity layer removes them again if it does. */

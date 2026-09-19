@@ -44,22 +44,48 @@
   INSTANT     metadata-only changes (.frm rewrite, no engine work):
               rename column/index, change default, change table options,
               ADD COLUMN, DROP COLUMN (row format is self-describing via
-              the ROW_HEADER_MAGIC header written by serialize_row)
+              the ROW_HEADER_MAGIC header written by serialize_row), except
+              where the change moves the record's null bitmap, which the
+              stored rows carry verbatim and so cannot be reinterpreted
   INPLACE     add/drop secondary indexes (create/drop CFs, populate)
   COPY        column type changes, PK changes
 */
+/* where the server puts the first column's null bit.  a record that is not packed reserves the
+   leading bit and starts the columns at one; a packed record starts them at zero. */
+static inline uint tdb_null_bit_base(const TABLE_SHARE *s)
+{
+    return (s->db_create_options & HA_OPTION_PACK_RECORD) ? 0 : 1;
+}
+
 enum_alter_inplace_result
-ha_tidesdb::check_if_supported_inplace_alter(TABLE *altered_table [[maybe_unused]],
+ha_tidesdb::check_if_supported_inplace_alter(TABLE *altered_table,
                                              Alter_inplace_info *ha_alter_info)
 {
     DBUG_ENTER("ha_tidesdb::check_if_supported_inplace_alter");
 
     TDB_ALTER_FLAGS_T flags = ha_alter_info->handler_flags;
 
+    /* A stored row carries the server's own null bitmap verbatim, so which bit a column's null flag
+       sits at is part of the format the row was written in.  That numbering moves when the record
+       changes between packed and unpacked, which is what adding a table's first variable-length
+       column does.  Left instant, every existing row would then be read with its null bits one
+       place over from where they were written, and a column that held a value would come back NULL
+       -- silently, since the bytes are all still there.  The rows have to be rewritten under the
+       new layout, and the copy algorithm is what does that. */
+    if (altered_table && altered_table->s && table && table->s &&
+        tdb_null_bit_base(table->s) != tdb_null_bit_base(altered_table->s))
+    {
+        ha_alter_info->unsupported_reason =
+            "TidesDB must rebuild the table when the record's null bitmap moves";
+        DBUG_RETURN(HA_ALTER_INPLACE_NOT_SUPPORTED);
+    }
+
     /* Operations that are pure metadata (INSTANT).
        ADD/DROP COLUMN is instant because the packed row format includes
        a header with the stored null_bytes and field_count, so
-       deserialize_row adapts to rows written with any prior schema. */
+       deserialize_row adapts to rows written with any prior schema --
+       as long as the null bitmap still means the same thing, which the
+       check above is what guarantees. */
     static const TDB_ALTER_FLAGS_T TIDESDB_INSTANT = TDB_ALTER_INSTANT_SET;
 
     /* Operations we can do inplace (add/drop secondary indexes) */
@@ -180,6 +206,10 @@ bool ha_tidesdb::prepare_inplace_alter_table(TABLE *altered_table,
                 my_error(ER_INTERNAL_ERROR, MYF(0), "[TIDESDB] index CF not found after create");
                 DBUG_RETURN(true);
             }
+
+            /* Same as at create: record the key convention, in the table's data family. */
+            tdb_key_shape_store(tidesdb_get_column_family(tdb_global, base_cf.c_str()),
+                                TDB_KEY_NAME(new_key), new_key);
 
             ctx->add_cfs.push_back(icf);
             ctx->add_cf_names.push_back(idx_cf);

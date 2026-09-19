@@ -1,0 +1,75 @@
+#
+# TEST 1: adding the first variable-length column keeps the existing values
+#
+CREATE TABLE nb1 (cid INT PRIMARY KEY, pref INT) ENGINE=TidesDB;
+INSERT INTO nb1 VALUES (10, 1), (11, NULL), (12, 2);
+ALTER TABLE nb1 ADD COLUMN note VARCHAR(20);
+# pref must still read 1, NULL, 2 -- and note NULL everywhere
+SELECT cid, pref, note FROM nb1 ORDER BY cid;
+cid	pref	note
+10	1	NULL
+11	NULL	NULL
+12	2	NULL
+DROP TABLE nb1;
+#
+# TEST 2: the same, with the new column NOT NULL and defaulted
+#
+CREATE TABLE nb2 (cid INT PRIMARY KEY, pref INT) ENGINE=TidesDB;
+INSERT INTO nb2 VALUES (10, 1), (11, NULL);
+ALTER TABLE nb2 ADD COLUMN note VARCHAR(20) NOT NULL DEFAULT 'd';
+SELECT cid, pref, note FROM nb2 ORDER BY cid;
+cid	pref	note
+10	1	d
+11	NULL	d
+DROP TABLE nb2;
+#
+# TEST 3: ALGORITHM=INSTANT is refused rather than silently corrupting
+#
+CREATE TABLE nb3 (cid INT PRIMARY KEY, pref INT) ENGINE=TidesDB;
+INSERT INTO nb3 VALUES (10, 1);
+ALTER TABLE nb3 ADD COLUMN note VARCHAR(20), ALGORITHM=INSTANT;
+ERROR 0A000: ALGORITHM=INSTANT is not supported. Reason: TidesDB must rebuild the table when the record's null bitmap moves. Try ALGORITHM=COPY/INPLACE.
+# the refused statement changed nothing
+SELECT cid, pref FROM nb3;
+cid	pref
+10	1
+DROP TABLE nb3;
+#
+# TEST 4: dropping the last variable-length column moves the bits back
+#
+CREATE TABLE nb4 (cid INT PRIMARY KEY, pref INT, v VARCHAR(10)) ENGINE=TidesDB;
+INSERT INTO nb4 VALUES (10, 1, 'x'), (11, NULL, 'y');
+ALTER TABLE nb4 DROP COLUMN v;
+SELECT cid, pref FROM nb4 ORDER BY cid;
+cid	pref
+10	1
+11	NULL
+DROP TABLE nb4;
+#
+# TEST 5: the cases that stay instant are still instant, and still correct
+#
+# A fixed-width column does not change the record format, so this one must not be
+# pushed onto the copy path by the check above.
+CREATE TABLE nb5 (cid INT PRIMARY KEY, pref INT) ENGINE=TidesDB;
+INSERT INTO nb5 VALUES (10, 1), (11, NULL);
+ALTER TABLE nb5 ADD COLUMN note INT, ALGORITHM=INSTANT;
+SELECT cid, pref, note FROM nb5 ORDER BY cid;
+cid	pref	note
+10	1	NULL
+11	NULL	NULL
+ALTER TABLE nb5 ADD COLUMN fixed CHAR(5), ALGORITHM=INSTANT;
+SELECT cid, pref, note, fixed FROM nb5 ORDER BY cid;
+cid	pref	note	fixed
+10	1	NULL	NULL
+11	NULL	NULL	NULL
+DROP TABLE nb5;
+# and a table that already holds a variable-length column stays instant too
+CREATE TABLE nb6 (cid INT PRIMARY KEY, pref INT, v VARCHAR(10)) ENGINE=TidesDB;
+INSERT INTO nb6 VALUES (10, 1, 'hello'), (11, NULL, 'world');
+ALTER TABLE nb6 ADD COLUMN note VARCHAR(5), ALGORITHM=INSTANT;
+SELECT cid, pref, v, note FROM nb6 ORDER BY cid;
+cid	pref	v	note
+10	1	hello	NULL
+11	NULL	world	NULL
+DROP TABLE nb6;
+# Done.

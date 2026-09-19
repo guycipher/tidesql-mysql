@@ -93,6 +93,7 @@ struct tdb_fk_def
     std::vector<std::string> ref_column_names; /* referenced column names, for display */
     std::string child_index_name;              /* index on the child fk columns          */
     std::string parent_index_name;             /* pk or unique index probed on the parent */
+    std::vector<uint8> parent_nullable;        /* whether each parent key column is nullable */
     uint8 on_delete;                           /* enum_fk_option                         */
     uint8 on_update;                           /* enum_fk_option                         */
     /* Key numbers resolved at load time from the table this side owns, so the
@@ -598,9 +599,14 @@ class ha_tidesdb : public handler
                                    uint unpack_count);
     void deserialize_row(uchar *buf, const std::string &row);
 
-    /* Build memcmp-comparable key bytes into out[]; returns byte count */
+    /* Build memcmp-comparable key bytes into out[]; returns byte count.
+       fk_ref_nullable, when given, builds a key that probes a parent key rather than this table's
+       own: an indicator byte is written for the parts it marks nullable and for no others, which is
+       how the parent encoded them.  It is always SORT_KEY_NOT_NULL, since the caller checks the
+       referencing columns are non-null before probing.  Null means encode for this table, taking
+       each part's nullability from its own field. */
     uint make_comparable_key(KEY *key_info, const uchar *record, uint num_parts, uchar *out,
-                             bool for_fk_ref = false);
+                             const std::vector<uint8> *fk_ref_nullable = nullptr);
 
     /* Convert key_copy-format search key directly to comparable bytes */
     uint key_copy_to_comparable(KEY *key_info, const uchar *key_buf, uint key_len, uchar *out);
@@ -729,7 +735,7 @@ class ha_tidesdb : public handler
        is unavailable (the caller unlocks and returns the code). */
     /* dd_table_def is the server's own definition of the table, passed opaquely because only
        the servers that have one name the type; it is where a per-column option lives there. */
-    int open_init_share_columns(const char *name, const void *dd_table_def);
+    int open_init_share_columns(const char *name);
 
     /* build the per-field serialize/deserialize plan (offset, pack length, memcpy-fast eligibility)
        cached on the share for the row hot loops. */
@@ -905,8 +911,10 @@ class ha_tidesdb : public handler
        row ops and return 0 to proceed or a handler error to surface, and each is
        a cheap early return when the relevant list is empty or foreign_key_checks
        is off. */
-    int fk_persist_defs(const char *path, TABLE *table_arg, HA_CREATE_INFO *create_info,
-                        const void *dd_table_def);
+    int fk_persist_defs(const char *path, TABLE *table_arg, HA_CREATE_INFO *create_info);
+    /* Re-key and rewrite every catalog record naming the table being renamed, on both the child
+       and the parent side, so the constraints follow the table to its new name. */
+    static int fk_rename_catalog(const char *from, const char *to);
     void fk_load();
     static int fk_purge_catalog(const char *child_cf_name);
     int fk_check_child(const uchar *new_row);

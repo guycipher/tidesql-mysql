@@ -192,7 +192,7 @@ typedef std::ptrdiff_t my_ptrdiff_t;
    which is where RULES.md rule 6's "no token pasting" bound is stretched, to parameter fragments.
    the alternative is two full copies of the handler declaration. */
 #define TDB_DD_OPEN_ARG , const dd::Table *dd_table_def [[maybe_unused]]
-#define TDB_DD_CREATE_ARG , dd::Table *dd_table_def
+#define TDB_DD_CREATE_ARG , dd::Table *dd_table_def [[maybe_unused]]
 #define TDB_DD_TABLE_ARG dd_table_def
 #define TDB_DD_DELETE_ARG , const dd::Table *dd_table_def [[maybe_unused]]
 #define TDB_DD_RENAME_ARG \
@@ -379,14 +379,13 @@ typedef std::ptrdiff_t my_ptrdiff_t;
 #define TDB_FIELD_MAYBE_NULL(f) ((f)->is_nullable())
 
 /* per-column CREATE TABLE options.  the engine has exactly one -- which column, if any, supplies a
-   row's own expiry -- and it is asked for as a question rather than a struct, because the two
-   servers keep the answer in different places.
+   row's own expiry -- and it is asked for as a question rather than a struct.
 
-   where the server parses engine-specific option syntax the answer hangs off the Field.  MySQL
-   keeps a column's ENGINE_ATTRIBUTE in the dictionary and does not copy it onto the Field, so the
-   answer comes from the dictionary definition the open was handed, matched to the column by name.
-   both take the same three arguments so the call site reads the same either way. */
-#define TDB_FIELD_IS_TTL_SOURCE(dd_def, tbl, i) tdb_field_is_ttl_source((dd_def), (tbl), (i))
+   a column's ENGINE_ATTRIBUTE reaches the engine on the Field itself: the server reads it out of
+   the dictionary while it builds the share and copies it to Field::m_engine_attribute, which it
+   does before handing the table to either create() or open().  so the engine never reads the
+   dictionary for this, and never has to match a column by name to find it. */
+#define TDB_FIELD_IS_TTL_SOURCE(tbl, i) tdb_field_is_ttl_source((tbl), (i))
 
 /* ******************** handler method sets ******************** */
 
@@ -458,7 +457,7 @@ typedef std::ptrdiff_t my_ptrdiff_t;
 /* the server stored the attribute without reading it, so the engine is the only thing that can
    tell a mistyped option from a real one, and CREATE and ALTER ask here before accepting. */
 #define TDB_TABLE_OPTIONS_ERROR(tbl, error) tdb_table_options_error((tbl), (error))
-#define TDB_COLUMN_OPTIONS_ERROR(dd_def, error) tdb_column_options_error((dd_def), (error))
+#define TDB_COLUMN_OPTIONS_ERROR(tbl, error) tdb_column_options_error((tbl), (error))
 
 /* and because the server records only what the table named, not what the unnamed options resolved
    to, the engine writes the resolved set into the table's own column family when the table is

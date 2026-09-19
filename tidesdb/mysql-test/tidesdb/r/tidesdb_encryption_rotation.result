@@ -16,7 +16,9 @@ id	payload
 #
 # rotate the key, then write rows under key version 2
 #
-SET GLOBAL tidesdb_rotate_table_key = 1;
+SELECT tidesdb_rotate_table_key(1) AS rotated;
+rotated
+OK
 INSERT INTO enc VALUES (3,'written under version two'),(4,'also version two');
 # all four rows decrypt, the first two under v1 and the rest under v2
 SELECT * FROM enc ORDER BY id;
@@ -28,7 +30,9 @@ id	payload
 #
 # rotate again and confirm all three key vintages still read back
 #
-SET GLOBAL tidesdb_rotate_table_key = 1;
+SELECT tidesdb_rotate_table_key(1) AS rotated;
+rotated
+OK
 INSERT INTO enc VALUES (5,'written under version three');
 SELECT * FROM enc ORDER BY id;
 id	payload
@@ -49,7 +53,6 @@ id	payload
 4	also version two
 5	written under version three
 DROP TABLE enc;
-SET GLOBAL tidesdb_rotate_table_key = DEFAULT;
 # ----------------------------------------------------------------------
 # Teardown
 # Removing manifest file for current MySQL server instance

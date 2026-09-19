@@ -42,8 +42,6 @@
 #include <string>
 #include <vector>
 
-#include "dd/cache/dictionary_client.h"
-#include "dd/types/table.h"
 #include "my_systime.h"
 #include "sql_class.h"
 #include "src/core/cf_name.h"
@@ -110,31 +108,39 @@ static tidesdb_column_family_t *tdb_ddl_open_cf()
 
 /**
  * tdb_ddl_write
- * persist one pending record on its own transaction, so it is durable before the change it
- * describes is attempted
+ * write one pending record through the statement's own transaction
+ * @param thd the session
  * @param key the record key
  * @param key_len the key length
  * @param value the encoded record
- * @return true when the write committed
+ * @return true when the record was written into the statement's transaction
+ *
+ * Not committed here, and deliberately so.  The record goes in the transaction the server commits
+ * or rolls back with the statement, so it reaches storage exactly when the schema change does.
+ * That is what lets the hook afterwards read the verdict out of the engine's own storage: a record
+ * that is there committed, one that is gone did not.
  */
-static bool tdb_ddl_write(const uint8_t *key, size_t key_len, const std::string &value)
+static bool tdb_ddl_write(THD *thd, const uint8_t *key, size_t key_len, const std::string &value)
 {
     tidesdb_column_family_t *cf = tdb_ddl_open_cf();
     if (!cf || !tdb_global) return false;
 
-    tidesdb_txn_t *txn = nullptr;
-    if (tidesdb_txn_begin(tdb_global, &txn) != TDB_SUCCESS) return false;
+    tidesdb_txn_t *txn = tdb_stmt_txn_for_ddl(thd);
+    if (!txn) return false;
 
-    bool ok = tidesdb_txn_put(txn, cf, key, key_len, (const uint8_t *)value.data(), value.size(),
-                              TIDESDB_TTL_NONE) == TDB_SUCCESS;
-    if (ok)
-        ok = tidesdb_txn_commit(txn) == TDB_SUCCESS;
-    else
-        (void)tidesdb_txn_rollback(txn);
-
-    tidesdb_txn_free(txn);
-    return ok;
+    return tidesdb_txn_put(txn, cf, key, key_len, (const uint8_t *)value.data(), value.size(),
+                           TIDESDB_TTL_NONE) == TDB_SUCCESS;
 }
+
+/* What this statement wrote, so the hook afterwards knows which records to look for.  A rolled-back
+   CREATE takes its record down with the transaction, so the intent to undo it survives only here --
+   which is why the list is kept rather than the hook simply scanning what is in storage. */
+struct tdb_ddl_pending_t
+{
+    std::string key;
+    ddl_log::record rec;
+};
+static thread_local std::vector<tdb_ddl_pending_t> tdb_ddl_stmt_records;
 
 /**
  * tdb_ddl_erase
@@ -183,55 +189,66 @@ static bool tdb_ddl_record(THD *thd, const char *path, ddl_log::intent what)
     uint8_t key[ddl_log::KEY_LEN];
     const size_t key_len = ddl_log::encode_key(tdb_ddl_boot_id, tdb_ddl_sequence.fetch_add(1), key);
 
-    return tdb_ddl_write(key, key_len, value);
+    if (!tdb_ddl_write(thd, key, key_len, value)) return false;
+
+    tdb_ddl_stmt_records.push_back({std::string((const char *)key, key_len), std::move(rec)});
+    return true;
+}
+
+/**
+ * tdb_ddl_record_survived
+ * whether a record this statement wrote is in storage now
+ * @param key the record key
+ * @param key_len the key length
+ * @return true when the record is there, which means the statement committed
+ */
+static bool tdb_ddl_record_survived(const uint8_t *key, size_t key_len)
+{
+    tidesdb_column_family_t *cf = tdb_ddl_open_cf();
+    if (!cf || !tdb_global) return false;
+
+    tidesdb_txn_t *txn = nullptr;
+    if (tidesdb_txn_begin(tdb_global, &txn) != TDB_SUCCESS) return false;
+
+    uint8_t *val = nullptr;
+    size_t vlen = 0;
+    tdb_owned_buf vguard(val);
+    const bool found = tidesdb_txn_get(txn, cf, key, key_len, &val, &vlen) == TDB_SUCCESS && val;
+
+    (void)tidesdb_txn_rollback(txn);
+    tidesdb_txn_free(txn);
+    return found;
 }
 
 /**
  * tdb_ddl_resolve
- * carry out or abandon one pending record, according to what the dictionary now holds, then remove
- * it.  a record whose outcome cannot be established is left in place for a later pass
- * @param thd the session
+ * carry out or abandon one pending record, then remove it
  * @param key the record key
  * @param key_len the key length
  * @param rec the parsed record
+ * @param committed whether the statement that wrote the record committed
  */
-static void tdb_ddl_resolve(THD *thd, const uint8_t *key, size_t key_len,
-                            const ddl_log::record &rec)
+static void tdb_ddl_resolve(const uint8_t *key, size_t key_len, const ddl_log::record &rec,
+                            bool committed)
 {
-    dd::cache::Dictionary_client::Auto_releaser releaser(thd->dd_client());
-
-    const dd::String_type dd_schema(rec.db.c_str(), rec.db.size());
-    const dd::String_type dd_table(rec.table.c_str(), rec.table.size());
-
-    const dd::Table *definition = nullptr;
-    if (thd->dd_client()->acquire(dd_schema, dd_table, &definition))
-    {
-        /* The dictionary could not be read, so the outcome is unknown.  Leaving both the families
-           and the record alone is the recoverable choice for either intent: a later pass can still
-           decide, where removing storage on a guess cannot be undone. */
-        sql_print_warning(
-            "[TIDESDB] post-DDL: could not read the data dictionary for `%s`.`%s`; its pending "
-            "schema change is left for a later pass",
-            rec.db.c_str(), rec.table.c_str());
-        return;
-    }
-
     /* Both intents turn on the same question, for different reasons, and want the same answer: the
-       families go when the dictionary no longer holds the table.
+       families go when the table the record describes is not the one the server ended up with.
 
-         drop   + table gone     the drop committed, so remove them
-         drop   + table present  the drop rolled back, so keep them
-         create + table gone     the create rolled back, so remove what it made
-         create + table present  the create committed, so keep them
+         drop   + committed      the drop happened, so remove them
+         drop   + rolled back    the table is still there, so keep them
+         create + committed      the table is there, so keep them
+         create + rolled back    nothing was created, so remove what it made
 
        Written as one condition rather than a branch per intent, because a branch that drifted apart
        would silently destroy a live table. */
-    if (definition == nullptr)
+    const bool remove_families = (rec.what == ddl_log::intent::drop) == committed;
+
+    if (remove_families)
     {
         const int rc = tdb_ddl_drop_table_cfs_now(rec.path.c_str());
         if (rc != 0)
         {
-            /* The statement has already committed, so this cannot fail it.  Keep the record so a
+            /* The statement has already finished, so this cannot fail it.  Keep the record so a
                later pass retries rather than orphaning the storage. */
             sql_print_error(
                 "[TIDESDB] post-DDL: failed to remove the column families of `%s`.`%s` (err=%d); "
@@ -241,20 +258,23 @@ static void tdb_ddl_resolve(THD *thd, const uint8_t *key, size_t key_len,
         }
     }
 
+    /* A record from a rolled-back statement went down with the transaction and there is nothing to
+       erase; erasing anyway is a harmless no-op, and keeps the one caller simple. */
     tdb_ddl_erase(key, key_len);
 }
 
 /**
- * tdb_ddl_scan
- * resolve every pending record the predicate accepts
- * @param thd the session
- * @param only_previous_runs when true, skip records this run wrote, whose statements may still be
- *                           in flight; when false, resolve this run's records only
+ * tdb_ddl_recover
+ * resolve every record left in storage by an earlier server run
+ *
+ * A record only reaches storage when the statement that wrote it committed, so every record found
+ * here describes a change that happened and had not been carried out when the server stopped.
+ * Records this run wrote are not touched: their statements resolve through the hook.
  */
-static void tdb_ddl_scan(THD *thd, bool only_previous_runs)
+static void tdb_ddl_recover()
 {
     tidesdb_column_family_t *cf = tdb_ddl_open_cf();
-    if (!cf || !tdb_global || !thd) return;
+    if (!cf || !tdb_global) return;
 
     tidesdb_txn_t *txn = nullptr;
     if (tidesdb_txn_begin(tdb_global, &txn) != TDB_SUCCESS) return;
@@ -267,8 +287,8 @@ static void tdb_ddl_scan(THD *thd, bool only_previous_runs)
         return;
     }
 
-    /* Collect first, resolve after.  Resolving reaches the dictionary and writes back to this same
-       family, which must not happen while an iterator over it is open. */
+    /* Collect first, resolve after.  Resolving writes back to this same family, which must not
+       happen while an iterator over it is open. */
     std::vector<std::pair<std::string, ddl_log::record>> pending;
 
     /* A fresh iterator is unpositioned, so it is seeked before the first read; stepping it without
@@ -299,8 +319,7 @@ static void tdb_ddl_scan(THD *thd, bool only_previous_runs)
             continue;
         }
 
-        const bool from_this_run = (boot == tdb_ddl_boot_id);
-        if (only_previous_runs == from_this_run)
+        if (boot == tdb_ddl_boot_id)
         {
             tidesdb_iter_next(iter);
             continue;
@@ -327,7 +346,8 @@ static void tdb_ddl_scan(THD *thd, bool only_previous_runs)
     tidesdb_txn_free(txn);
 
     for (const auto &entry : pending)
-        tdb_ddl_resolve(thd, (const uint8_t *)entry.first.data(), entry.first.size(), entry.second);
+        tdb_ddl_resolve((const uint8_t *)entry.first.data(), entry.first.size(), entry.second,
+                        true);
 }
 
 /**
@@ -340,13 +360,22 @@ static void tdb_ddl_post_ddl(THD *thd)
 {
     if (!thd) return;
 
-    /* The recovery pass needs a session to reach the dictionary, which plugin init does not have,
-       so it happens here on the first hook after startup.  It touches only records left by earlier
-       server runs, whose statements are necessarily over. */
+    /* Records left by earlier runs are swept once, on the first hook after startup.  It no longer
+       needs a session for anything -- it reads only the engine's own storage -- but this is still
+       the first point at which the engine is certainly up and serving. */
     bool expected = false;
-    if (tdb_ddl_recovered.compare_exchange_strong(expected, true)) tdb_ddl_scan(thd, true);
+    if (tdb_ddl_recovered.compare_exchange_strong(expected, true)) tdb_ddl_recover();
 
-    tdb_ddl_scan(thd, false);
+    /* This statement's own records.  Whether each reached storage is the statement's verdict: the
+       server committed or rolled back the transaction they were written through, so the record is
+       there exactly when the schema change is. */
+    std::vector<tdb_ddl_pending_t> mine;
+    mine.swap(tdb_ddl_stmt_records);
+    for (const auto &p : mine)
+    {
+        const uint8_t *k = (const uint8_t *)p.key.data();
+        tdb_ddl_resolve(k, p.key.size(), p.rec, tdb_ddl_record_survived(k, p.key.size()));
+    }
 }
 
 int tdb_ddl_drop_table(THD *thd, const char *path)

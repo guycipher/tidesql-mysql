@@ -50,12 +50,12 @@
 #include <mysql/components/services/keyring_generator.h>
 #include <mysql/components/services/keyring_reader_with_status.h>
 #include <mysql/components/services/keyring_writer.h>
+#include <mysql/components/services/mysql_system_variable.h>
 #include <mysql/service_plugin_registry.h>
 
 #include "log.h"
 #include "my_aes.h"
 #include "my_rnd.h"
-#include "mysqld.h"
 #include "src/core/crypto_keyenc.h"
 #include "src/handler/ha_tidesdb_internal.h"
 
@@ -73,6 +73,13 @@ static SERVICE_TYPE(registry) *tdb_registry = nullptr;
 static SERVICE_TYPE(keyring_reader_with_status) *tdb_keyring_reader = nullptr;
 static SERVICE_TYPE(keyring_writer) *tdb_keyring_writer = nullptr;
 static SERVICE_TYPE(keyring_generator) *tdb_keyring_generator = nullptr;
+
+/* the server uuid, read once at init through the sysvar service and held for the life of the
+   plugin.  it is read-only after server startup, so one read is enough, and going through the
+   service rather than the mysqld global keeps the plugin off a symbol the server does not export to
+   plugins.  empty means the read failed, which tdb_crypto_available treats as no encryption:
+   minting a key under a name missing the uuid would orphan every key an earlier boot wrote. */
+static std::string tdb_server_uuid;
 
 /* the reserved family the wrapped table keys live in, opened once at init. */
 static tidesdb_column_family_t *tdb_crypto_cf = nullptr;
@@ -109,6 +116,10 @@ static constexpr size_t TDB_CRYPTO_KEY_LEN = 32;
    not understand and the fetch is failed rather than truncated. */
 static constexpr size_t TDB_KEYRING_TYPE_BUF_LEN = 32;
 
+/* room for the 36-character server uuid and a terminator, with slack so a longer value is read
+   rather than refused. */
+static constexpr size_t TDB_SERVER_UUID_BUF_LEN = 64;
+
 /* rows carry their own IV so CBC is the row cipher.  the wrap is one block-aligned random key with
    no structure for ECB to leak, which is the same split InnoDB makes. */
 static constexpr my_aes_opmode TDB_ROW_CIPHER = my_aes_256_cbc;
@@ -127,8 +138,39 @@ static constexpr int TDB_AES_FAILED = 0;
  */
 static std::string tdb_master_key_name(uint32_t generation)
 {
-    return std::string(TDB_MASTER_KEY_PREFIX) + TDB_MASTER_KEY_SEP + server_uuid +
+    return std::string(TDB_MASTER_KEY_PREFIX) + TDB_MASTER_KEY_SEP + tdb_server_uuid +
            TDB_MASTER_KEY_SEP + std::to_string(generation);
+}
+
+/**
+ * tdb_read_server_uuid
+ * read @@GLOBAL.server_uuid through the sysvar service
+ * @param out out -- receives the uuid, left empty on any failure
+ * @return true when the uuid was read
+ */
+static bool tdb_read_server_uuid(std::string &out)
+{
+    out.clear();
+    if (!tdb_registry) return false;
+
+    my_h_service svc = nullptr;
+    if (tdb_registry->acquire("mysql_system_variable_reader", &svc) || !svc) return false;
+
+    auto *reader = reinterpret_cast<SERVICE_TYPE(mysql_system_variable_reader) *>(svc);
+
+    /* a uuid is 36 characters; the buffer is sized past that so a longer value is read whole rather
+       than reported as too small, and the service writes the length it copied. */
+    char buf[TDB_SERVER_UUID_BUF_LEN];
+    char *value = buf;
+    size_t value_len = sizeof(buf) - 1;
+
+    /* a null thd asks for the global value, which is the only one this variable has. */
+    const bool failed = reader->get(nullptr, "GLOBAL", "mysql_server", "server_uuid",
+                                    reinterpret_cast<void **>(&value), &value_len);
+    if (!failed && value != nullptr && value_len > 0) out.assign(value, value_len);
+
+    tdb_registry->release(svc);
+    return !out.empty();
 }
 
 /**
@@ -425,6 +467,12 @@ bool tdb_crypto_init()
     tdb_keyring_writer = reinterpret_cast<SERVICE_TYPE(keyring_writer) *>(writer);
     tdb_keyring_generator = reinterpret_cast<SERVICE_TYPE(keyring_generator) *>(generator);
 
+    /* the uuid names every master key, so without it the engine cannot address the keys an earlier
+       boot wrote.  refusing encryption here is the safe failure: minting under a different name
+       would leave the old keys unreachable and the tables they protect unreadable. */
+    if (!tdb_read_server_uuid(tdb_server_uuid))
+        sql_print_warning("[TIDESDB] could not read server_uuid; ENCRYPTED tables will be refused");
+
     tdb_crypto_cf = tidesdb_get_column_family(tdb_global, TDB_CRYPTO_CF_NAME);
     if (!tdb_crypto_cf)
     {
@@ -462,6 +510,7 @@ void tdb_crypto_deinit()
     tdb_keyring_writer = nullptr;
     tdb_keyring_generator = nullptr;
     tdb_crypto_cf = nullptr;
+    tdb_server_uuid.clear();
     tdb_master_generation = keyenc::GENERATION_NONE;
 
     mysql_plugin_registry_release(tdb_registry);
@@ -471,7 +520,7 @@ void tdb_crypto_deinit()
 bool tdb_crypto_available()
 {
     return tdb_keyring_reader != nullptr && tdb_keyring_generator != nullptr &&
-           tdb_crypto_cf != nullptr;
+           tdb_crypto_cf != nullptr && !tdb_server_uuid.empty();
 }
 
 unsigned int tdb_crypto_latest_key_version(unsigned int key_id)

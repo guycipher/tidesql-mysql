@@ -10,23 +10,39 @@ PRIMARY KEY (d_w_id, d_id)
 ) ENGINE=TidesDB;
 CREATE TABLE txn_log (
 id BIGINT NOT NULL AUTO_INCREMENT,
-vu INT NOT NULL,
+vu BIGINT UNSIGNED NOT NULL,
 ts BIGINT NOT NULL,
 PRIMARY KEY (id)
 ) ENGINE=TidesDB;
 INSERT INTO district VALUES (1, 1, 3001);
+CREATE PROCEDURE new_order()
+BEGIN
+DECLARE EXIT HANDLER FOR SQLEXCEPTION ROLLBACK;
+START TRANSACTION;
+SELECT d_next_o_id INTO @cur FROM district WHERE d_w_id=1 AND d_id=1 FOR UPDATE;
+UPDATE district SET d_next_o_id = d_next_o_id + 1 WHERE d_w_id=1 AND d_id=1;
+INSERT INTO txn_log (vu, ts) VALUES (CONNECTION_ID(), UNIX_TIMESTAMP());
+COMMIT;
+END|
 SELECT
 d_next_o_id - 3001 AS counter_delta,
 (SELECT COUNT(*) FROM txn_log) AS commits_logged,
+8000 - (SELECT COUNT(*) FROM txn_log) AS conflicts,
 CASE
 WHEN d_next_o_id - 3001 = (SELECT COUNT(*) FROM txn_log)
 THEN 'OK'
     WHEN d_next_o_id - 3001 < (SELECT COUNT(*) FROM txn_log)
 THEN 'LOST_UPDATE'
     ELSE 'PHANTOM_INCREMENT'
-  END AS verdict
+  END AS verdict,
+CASE
+WHEN (SELECT COUNT(*) FROM txn_log) < 8000
+THEN 'CONTENDED'
+    ELSE 'NO_CONTENTION'
+  END AS contention
 FROM district WHERE d_w_id=1 AND d_id=1;
-counter_delta	commits_logged	verdict
-#	#	OK
+counter_delta	commits_logged	conflicts	verdict	contention
+#	#	#	OK	CONTENDED
+DROP PROCEDURE new_order;
 DROP TABLE district;
 DROP TABLE txn_log;
