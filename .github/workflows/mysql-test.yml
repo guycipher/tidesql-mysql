@@ -382,10 +382,32 @@ jobs:
         working-directory: mysql-server/build/mysql-test
         run: |
           set -euo pipefail
-          # libtidesdb and the vcpkg compression DLLs are loaded at runtime when the
-          # server dlopens the plugin; without them on PATH every test fails to load
-          # the engine rather than failing on anything it tests.
-          export PATH="$GITHUB_WORKSPACE/openssl-prefix/bin:$VCPKG_INSTALLATION_ROOT/installed/x64-windows/bin:$GITHUB_WORKSPACE/tidesdb-install/bin:$PATH"
+          # The plugin links the compression libraries as vcpkg's x64-windows triplet
+          # builds them, which is to say dynamically, so zstd.dll and lz4.dll have to be
+          # findable when the server loads it.  They are not linked into it: the message
+          # for a missing dependency is the same errno 126 as for a missing plugin, and
+          # reads as the plugin not being there at all.
+          #
+          # Both variables below hold Windows paths, and a Windows path cannot go into a
+          # PATH this shell builds: the drive colon in "D:\a\..." is the separator, so
+          # each one lands as an entry "D" and an entry "\a\..." and neither is a
+          # directory.  cygpath converts them to the form this shell splits correctly,
+          # and MSYS converts the whole thing back when it starts a native program.
+          ws="$(cygpath -u "$GITHUB_WORKSPACE")"
+          vcpkg_root="$(cygpath -u "$VCPKG_INSTALLATION_ROOT")"
+          export PATH="$ws/openssl-prefix/bin:$vcpkg_root/installed/x64-windows/bin:$ws/tidesdb-install/bin:$PATH"
+
+          # Check the files rather than trusting the paths: a dependency that is not
+          # reachable fails every test with an error that names no library at all.
+          vcpkg_bin="$vcpkg_root/installed/x64-windows/bin"
+          test -d "$vcpkg_bin" || { echo "no vcpkg bin directory at $vcpkg_bin"; exit 1; }
+          for pat in 'zstd*.dll' 'lz4*.dll'; do
+            # shellcheck disable=SC2086
+            match=$(ls $vcpkg_bin/$pat 2>/dev/null | head -1 || true)
+            test -n "$match" || { echo "no $pat in $vcpkg_bin; the plugin will not load";
+                                  ls "$vcpkg_bin"; exit 1; }
+            echo "  found $(basename "$match")"
+          done
 
           # With no --plugin-dir the server looks in <basedir>/lib/plugin, and nothing
           # puts anything there on Windows: MySQL's own CMakeLists links lib/plugin to
