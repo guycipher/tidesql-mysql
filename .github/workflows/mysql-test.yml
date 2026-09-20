@@ -278,8 +278,20 @@ jobs:
                     -property installationPath | tr -d '\r')"
           test -n "$VSPATH" || { echo "no Visual Studio with the C++ toolchain found"; exit 1; }
 
-          cmd //c "call \"${VSPATH}\\VC\\Auxiliary\\Build\\vcvars64.bat\" >nul && set" \
-            | tr -d '\r' > vcenv.txt
+          # The call goes in a batch file rather than on cmd's command line.  Inline, the
+          # path has to survive quoting by bash and then MSYS's translation of arguments
+          # bound for a native program, and MSYS hands the escaped quotes to cmd as
+          # written -- cmd answers that '\"C:\Program Files\...\"' is not a recognised
+          # command.  A file needs no quoting, and printf writes the path without bash
+          # getting a second look at its backslashes.
+          {
+            echo '@echo off'
+            printf 'call "%s\\VC\\Auxiliary\\Build\\vcvars64.bat" >nul\n' "$VSPATH"
+            echo 'set'
+          } > vcenv.bat
+          cmd //c vcenv.bat | tr -d '\r' > vcenv.txt
+          grep -qiE '^INCLUDE=' vcenv.txt \
+            || { echo "vcvars produced no environment; the batch file was:"; cat vcenv.bat; exit 1; }
           # Everything except PATH can be exported as-is.  PATH cannot: vcvars writes it
           # in Windows form, and putting that into this shell's PATH loses every Unix
           # tool the rest of the job runs.  cygpath converts the list instead.
