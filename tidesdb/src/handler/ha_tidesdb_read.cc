@@ -130,6 +130,43 @@ time_t ha_tidesdb::compute_row_ttl(const uchar *buf)
     return (time_t)ttl_seconds;
 }
 
+/* ******************** inherited_row_ttl ******************** */
+
+/*
+  The expiry an updated row keeps when none of the TTL sources applies to the new
+  write.  A row can carry an expiry no source reproduces -- it was inserted while a
+  session TTL was in force, and the session running the UPDATE need not have one set
+  -- and rewriting it with TIDESDB_TTL_NONE would quietly turn an expiring row into a
+  permanent one.  So the stored deadline is read back and what is left of it carried
+  forward.  Returns TIDESDB_TTL_NONE when there is no expiry to preserve, which is
+  also the answer when the row cannot be read.
+*/
+time_t ha_tidesdb::inherited_row_ttl(const uchar *pk, uint pk_len)
+{
+    uchar dk[DATA_KEY_BUF_LEN];
+    const uint dk_len = build_data_key(pk, pk_len, dk);
+
+    /* Absolute unix seconds, or negative for a row that never expires. */
+    time_t expires_at = TIDESDB_TTL_NONE;
+    if (tidesdb_txn_get_ttl(stmt_txn, share->cf, (const uint8_t *)dk, dk_len, &expires_at) !=
+        TDB_SUCCESS)
+        return TIDESDB_TTL_NONE;
+    if (expires_at < 0) return TIDESDB_TTL_NONE;
+
+    if (!cached_time_valid_)
+    {
+        cached_time_ = time(NULL);
+        cached_time_valid_ = true;
+    }
+
+    /* The library wants a duration and reads a zero as "no expiration", so a deadline
+       already behind us becomes the shortest expiring duration there is rather than
+       being rounded down into permanence.  The read path would not have produced an
+       expired row, but a clock moved backwards can still land us here. */
+    const time_t remaining = expires_at - cached_time_;
+    return remaining > 0 ? remaining : TIDESDB_TTL_MIN_SECONDS;
+}
+
 /* ******************** iter_read_current ******************** */
 
 /*

@@ -422,9 +422,18 @@ int ha_tidesdb::update_row(const uchar *old_data, TDB_ROW_IN *new_data)
     bool pk_changed = (old_pk_len != new_pk_len || memcmp(old_pk, new_pk, old_pk_len) != 0);
 
     /* We compute TTL when the table has TTL configured or the session overrides it.  Uses
-       cached_sess_ttl_ to avoid THDVAR + ha_thd() per row. */
-    time_t row_ttl =
-        (share->has_ttl || cached_sess_ttl_ > 0) ? compute_row_ttl(new_data) : TIDESDB_TTL_NONE;
+       cached_sess_ttl_ to avoid THDVAR + ha_thd() per row.  With neither, nothing here can
+       name this row's lifetime, yet the row on disk may still carry one from the session
+       that inserted it -- so the stored deadline is carried forward rather than dropped,
+       which would keep the row forever.  Resolved before the index maintenance below so
+       the secondary entries get the same lifetime as the row.
+
+       Note this is the else branch and not a fallback for a TTL_NONE result: where the
+       table does configure a TTL, a TTL column of zero still means this row does not
+       expire, and must not be overridden by what the row carried before. */
+    time_t row_ttl = (share->has_ttl || cached_sess_ttl_ > 0)
+                         ? compute_row_ttl(new_data)
+                         : inherited_row_ttl(old_pk, old_pk_len);
 
     if (!cached_skip_unique_)
     {
