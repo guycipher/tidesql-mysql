@@ -76,6 +76,7 @@ int ha_tidesdb::fetch_row_by_pk(tidesdb_txn_t *txn, const uchar *pk, uint pk_len
     }
     memcpy(current_pk_buf_, pk, pk_len);
     current_pk_len_ = pk_len;
+    row_expiry_valid_ = false;
 
     return 0;
 }
@@ -138,19 +139,27 @@ time_t ha_tidesdb::compute_row_ttl(const uchar *buf)
   session TTL was in force, and the session running the UPDATE need not have one set
   -- and rewriting it with TIDESDB_TTL_NONE would quietly turn an expiring row into a
   permanent one.  So the stored deadline is read back and what is left of it carried
-  forward.  Returns TIDESDB_TTL_NONE when there is no expiry to preserve, which is
-  also the answer when the row cannot be read.
+  forward.  A row reached through the scan iterator already had its expiry recorded by
+  iter_read_current; only a row reached by point fetch is looked up here.  Returns
+  TIDESDB_TTL_NONE when there is no expiry to preserve, which is also the answer when
+  the row cannot be read.
 */
 time_t ha_tidesdb::inherited_row_ttl(const uchar *pk, uint pk_len)
 {
-    uchar dk[DATA_KEY_BUF_LEN];
-    const uint dk_len = build_data_key(pk, pk_len, dk);
-
     /* Absolute unix seconds, or negative for a row that never expires. */
     time_t expires_at = TIDESDB_TTL_NONE;
-    if (tidesdb_txn_get_ttl(stmt_txn, share->cf, (const uint8_t *)dk, dk_len, &expires_at) !=
-        TDB_SUCCESS)
-        return TIDESDB_TTL_NONE;
+    if (row_expiry_valid_ && pk_len == current_pk_len_ && memcmp(pk, current_pk_buf_, pk_len) == 0)
+    {
+        expires_at = row_expiry_;
+    }
+    else
+    {
+        uchar dk[DATA_KEY_BUF_LEN];
+        const uint dk_len = build_data_key(pk, pk_len, dk);
+        if (tidesdb_txn_get_ttl(stmt_txn, share->cf, (const uint8_t *)dk, dk_len, &expires_at) !=
+            TDB_SUCCESS)
+            return TIDESDB_TTL_NONE;
+    }
     if (expires_at < 0) return TIDESDB_TTL_NONE;
 
     if (!cached_time_valid_)
@@ -194,6 +203,11 @@ int ha_tidesdb::iter_read_current(uchar *buf)
 
         current_pk_len_ = (uint)(key_size - KEY_NAMESPACE_LEN);
         memcpy(current_pk_buf_, key + KEY_NAMESPACE_LEN, current_pk_len_);
+
+        /* A write statement on a table with no TTL of its own records the row's stored expiry
+           while the iterator sits on it, which costs no lookup here and saves update_row one. */
+        row_expiry_valid_ =
+            capture_row_expiry_ && tidesdb_iter_ttl(scan_iter, &row_expiry_) == TDB_SUCCESS;
 
         if (likely(!has_blobs_ && !encrypted_))
         {

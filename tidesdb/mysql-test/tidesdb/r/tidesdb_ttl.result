@@ -241,5 +241,33 @@ id	val
 1	cleared
 DROP TABLE t_ttl_clear;
 #
+# ============================================
+# TEST 12: The expiry survives an UPDATE driven by a scan
+# ============================================
+#
+# TEST 10 updates by primary key, a point fetch.  An UPDATE whose WHERE is not on
+# the key reads its rows through the scan iterator instead, which records each
+# row's expiry as it passes.  Row 2 is also still a pending write of the open
+# transaction when it is updated, so the expiry comes from the transaction's own
+# buffered write rather than from the store.
+CREATE TABLE t_ttl_scan (id INT PRIMARY KEY, val VARCHAR(32)) ENGINE=TIDESDB;
+SET SESSION tidesdb_ttl = 5;
+INSERT INTO t_ttl_scan VALUES (1, 'committed'), (3, 'control');
+BEGIN;
+INSERT INTO t_ttl_scan VALUES (2, 'pending');
+SET SESSION tidesdb_ttl = 0;
+UPDATE t_ttl_scan SET val = CONCAT(val, ' updated') WHERE val IN ('committed', 'pending');
+COMMIT;
+# All three visible before the deadline
+SELECT id, val FROM t_ttl_scan ORDER BY id;
+id	val
+1	committed updated
+2	pending updated
+3	control
+# All three expired -- neither scanned update extended its row
+SELECT id, val FROM t_ttl_scan ORDER BY id;
+id	val
+DROP TABLE t_ttl_scan;
+#
 #
 # Done.

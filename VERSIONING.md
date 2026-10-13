@@ -112,6 +112,11 @@ format line.
   TidesDB release that writes format 10. A minor that moves to a new format must
   make it opt-in and default-off, which is what keeps that column true, and the
   release that changes it updates this table in the same commit.
+- **2.1.0 moves the default store location on Windows only.** Earlier releases
+  put `tidesdb_data` in the server's working directory there instead of beside
+  the data directory. The format is unchanged, so the store opens in place once
+  it is moved, or once `tidesdb_data_home_dir` points at it. See
+  [Where the data lives](doc/01-getting-started/install.md#where-the-data-lives).
 
 Add a row per release. A release that moves none of the columns still gets a
 row, because "unchanged" is the answer an operator is looking for.

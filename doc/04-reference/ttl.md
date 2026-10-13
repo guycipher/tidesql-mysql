@@ -100,3 +100,9 @@ UPDATE sessions SET token = 'def' WHERE id = 1;  -- still expires at the origina
 
 On a table shaped like this, an `UPDATE` cannot remove an expiry by omission. To change one,
 give the updating session a `tidesdb_ttl`, which puts the write back on step 2.
+
+Carrying the deadline forward costs a table that never uses TTL nothing. A row an `UPDATE`
+reaches through a scan has its expiry read off the iterator as the scan passes it, with no
+extra lookup, and only in a statement that writes the table, so a `SELECT` never reads it at
+all. A row reached by an exact primary-key match, as in the example above, is fetched by point
+lookup instead, and its expiry is looked up once more when it is written back.

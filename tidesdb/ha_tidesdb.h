@@ -553,6 +553,17 @@ class ha_tidesdb : public handler
     bool cached_is_autocommit_;
     bool cached_stmt_shape_valid_;
 
+    /* Whether this statement writes a table that has no TTL of its own, so a row read through
+       the scan iterator records its stored expiry for update_row to carry forward.  Set at
+       lock time and false for a read, so a SELECT scan never pays for it. */
+    bool capture_row_expiry_;
+
+    /* The expiry recorded with the row last read through the scan iterator, as absolute unix
+       seconds or negative for none, and whether it belongs to that row.  A point fetch clears
+       the flag, leaving inherited_row_ttl to look the expiry up itself. */
+    time_t row_expiry_;
+    bool row_expiry_valid_;
+
     /* Cached per-statement pointers to avoid repeated hash lookups.
        Set in external_lock(lock), cleared in external_lock(F_UNLCK).
        InnoDB caches these as m_user_thd / m_prebuilt->trx. */

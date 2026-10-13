@@ -361,6 +361,7 @@ int ha_tidesdb::update_regular_index(uint i, const uchar *old_data, const uchar 
        sec_idx_key's pk_from_record path works for hidden-PK tables. */
     memcpy(current_pk_buf_, new_pk, new_pk_len);
     current_pk_len_ = new_pk_len;
+    row_expiry_valid_ = false;
     uint new_ik_len = sec_idx_key(i, new_data, new_ik);
 
     if (old_ik_len == new_ik_len && memcmp(old_ik, new_ik, old_ik_len) == 0) return TDB_SUCCESS;
@@ -478,6 +479,7 @@ int ha_tidesdb::update_row(const uchar *old_data, TDB_ROW_IN *new_data)
 
     memcpy(current_pk_buf_, new_pk, new_pk_len);
     current_pk_len_ = new_pk_len;
+    row_expiry_valid_ = false;
 
     /* Bulk UPDATE mid-txn commit.  Symmetric to write_row's bulk path.  One UPDATE op counts as 1
        data put + 1 data delete (when PK changed) + up to num_secondary_indexes entries rewritten;
