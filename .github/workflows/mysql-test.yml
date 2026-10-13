@@ -107,9 +107,21 @@ jobs:
         if: runner.os == 'Windows'
         uses: mozilla-actions/sccache-action@v0.0.11
 
+      # The action only installs sccache.  Without this, sccache keeps its cache on the
+      # runner's local disk, which is discarded with the job, so every build is cold.
+      - name: Keep the sccache cache across runs (Windows)
+        if: runner.os == 'Windows'
+        shell: bash
+        run: echo "SCCACHE_GHA_ENABLED=true" >> "$GITHUB_ENV"
+
+      # ccache 4 defaults to ~/Library/Caches/ccache on macOS, not the ~/.cache/ccache
+      # the cache step saves, so without pinning it macOS saved nothing and built cold
+      # every run.  On Linux this is already the default.
       - name: Configure ccache (Unix)
         if: runner.os != 'Windows'
         run: |
+          export CCACHE_DIR="$HOME/.cache/ccache"
+          echo "CCACHE_DIR=$CCACHE_DIR" >> "$GITHUB_ENV"
           echo "/usr/lib/ccache:/usr/local/opt/ccache/libexec" >> "$GITHUB_PATH"
           ccache --set-config=max_size=2G
           ccache --zero-stats
